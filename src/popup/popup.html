@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Patrol</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="popup-container">
+        <div class="header">
+            <div class="logo">
+                <h1>Price Patrol</h1>
+                <span class="tagline">Crowdsourced Price Tracking</span>
+            </div>
+        </div>
+
+        <!-- Authentication Section -->
+        <div id="auth-section" class="section">
+            <div class="auth-form">
+                <input type="email" id="email" placeholder="Email address" class="input-field">
+                <input type="password" id="password" placeholder="Password" class="input-field">
+                <button id="login-btn" class="btn btn-primary">Login</button>
+                <div id="auth-error" class="error-message"></div>
+                <div class="auth-links">
+                    <a href="#" id="register-link" target="_blank">Create Account</a>
+                    <a href="#" id="forgot-password-link" target="_blank">Forgot Password?</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Section -->
+        <div id="main-section" class="section hidden">
+            <div class="user-info">
+                <div class="user-details">
+                    <span id="user-email" class="user-email"></span>
+                    <div id="recipe-count" class="recipe-count"></div>
+                </div>
+                <button id="logout-btn" class="btn btn-text">Logout</button>
+            </div>
+
+            <div class="current-page">
+                <div class="page-status">
+                    <div id="page-support-status" class="status-indicator">
+                        <span class="status-dot"></span>
+                        <span id="support-text">Checking page...</span>
+                    </div>
+                </div>
+                
+                <div id="extraction-section" class="extraction-section hidden">
+                    <div class="extraction-info">
+                        <h3>Data Extraction Available</h3>
+                        <p>This page contains product data that can be extracted for Price Patrol.</p>
+                    </div>
+                    
+                    <button id="extract-btn" class="btn btn-primary btn-large">
+                        <span class="btn-icon">📊</span>
+                        Extract Product Data
+                    </button>
+                    
+                    <div id="extraction-status" class="extraction-status"></div>
+                </div>
+
+                <div id="no-support-section" class="no-support-section hidden">
+                    <div class="no-support-info">
+                        <h3>Page Not Supported</h3>
+                        <p>This page doesn't have extraction recipes yet. We're constantly adding support for new merchants!</p>
+                    </div>
+                    
+                    <button id="refresh-recipes-btn" class="btn btn-secondary">
+                        <span class="btn-icon">🔄</span>
+                        Refresh Recipes
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-section">
+                <div class="stat-item">
+                    <span class="stat-number" id="supported-sites">-</span>
+                    <span class="stat-label">Supported Sites</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number" id="last-update">-</span>
+                    <span class="stat-label">Last Recipe Update</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <a href="https://github.com/price-patrol/price-patrol-extension" target="_blank" class="footer-link">
+                View Source Code
+            </a>
+            <span class="environment-indicator" id="env-indicator"></span>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
