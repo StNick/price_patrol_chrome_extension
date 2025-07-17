@@ -4,7 +4,7 @@ export class DataExtractor {
   static async extractFromPage(recipe: Recipe, url: string): Promise<ExtractedData> {
     const extractedData: ExtractedData = {
       url,
-      merchantName: recipe.merchant.name
+      merchantName: recipe.merchantName
     };
 
     // Get structured data context
@@ -59,63 +59,140 @@ export class DataExtractor {
   }
 
   private static async extractFieldValue(selector: RecipeSelector, context: any): Promise<string | null> {
-    // Structured data extraction
-    if (selector.structuredDataPath) {
-      return this.evaluateObjectPath(context, selector.structuredDataPath);
-    }
-
-    // CSS selector extraction
-    if (selector.cssSelector) {
-      const element = document.querySelector(selector.cssSelector);
-      if (element) {
-        let value = '';
-        
-        if (selector.attribute && selector.attribute !== 'textContent') {
-          value = element.getAttribute(selector.attribute) || '';
-        } else {
-          value = element.textContent?.trim() || '';
+    // Handle different extraction methods
+    switch (selector.extractionMethod) {
+      case 'STRUCTURED_DATA':
+        if (selector.selector) {
+          return this.evaluateObjectPath(context, selector.selector);
         }
+        break;
 
-        // Apply regex if specified
-        if (selector.regex && value) {
-          const regex = new RegExp(selector.regex, 'i');
-          const match = value.match(regex);
-          value = match ? (match[1] || match[0]) : value;
+      case 'TEXT':
+        if (selector.selector) {
+          const element = document.querySelector(selector.selector);
+          if (element) {
+            let value = element.textContent?.trim() || '';
+            
+            // Apply regex if specified
+            if (selector.regexPattern && value) {
+              const regex = new RegExp(selector.regexPattern, 'i');
+              const match = value.match(regex);
+              value = match ? (match[1] || match[0]) : value;
+            }
+
+            return value;
+          }
         }
+        break;
 
-        return value;
-      }
-    }
+      case 'ATTRIBUTE':
+        if (selector.selector && selector.attributeName) {
+          const element = document.querySelector(selector.selector);
+          if (element) {
+            let value = element.getAttribute(selector.attributeName) || '';
+            
+            // Apply regex if specified
+            if (selector.regexPattern && value) {
+              const regex = new RegExp(selector.regexPattern, 'i');
+              const match = value.match(regex);
+              value = match ? (match[1] || match[0]) : value;
+            }
 
-    // XPath extraction
-    if (selector.xpath) {
-      const result = document.evaluate(
-        selector.xpath,
-        document,
-        null,
-        XPathResult.FIRST_ORDERED_NODE_TYPE,
-        null
-      );
-      
-      const element = result.singleNodeValue as Element;
-      if (element) {
-        let value = '';
-        
-        if (selector.attribute && selector.attribute !== 'textContent') {
-          value = element.getAttribute(selector.attribute) || '';
-        } else {
-          value = element.textContent?.trim() || '';
+            return value;
+          }
         }
+        break;
 
-        // Apply regex if specified
-        if (selector.regex && value) {
-          const regex = new RegExp(selector.regex, 'i');
-          const match = value.match(regex);
-          value = match ? (match[1] || match[0]) : value;
+      case 'REGEX':
+        if (selector.regexPattern) {
+          let searchText = document.body.textContent || '';
+          
+          // If a selector is provided, search within that element
+          if (selector.selector) {
+            const element = document.querySelector(selector.selector);
+            if (element) {
+              searchText = element.textContent || '';
+            }
+          }
+          
+          const regex = new RegExp(selector.regexPattern, 'i');
+          const match = searchText.match(regex);
+          if (match) {
+            return match[1] || match[0];
+          }
         }
+        break;
 
-        return value;
-      }
+      case 'INNER_HTML':
+        if (selector.selector) {
+          const element = document.querySelector(selector.selector);
+          if (element) {
+            let value = element.innerHTML || '';
+            
+            // Apply regex if specified
+            if (selector.regexPattern && value) {
+              const regex = new RegExp(selector.regexPattern, 'i');
+              const match = value.match(regex);
+              value = match ? (match[1] || match[0]) : value;
+            }
+
+            return value;
+          }
+        }
+        break;
+
+      case 'XPATH':
+        if (selector.selector) {
+          const result = document.evaluate(
+            selector.selector,
+            document,
+            null,
+            XPathResult.FIRST_ORDERED_NODE_TYPE,
+            null
+          );
+          
+          const element = result.singleNodeValue as Element;
+          if (element) {
+            let value = '';
+            
+            if (selector.attributeName && selector.attributeName !== 'textContent') {
+              value = element.getAttribute(selector.attributeName) || '';
+            } else {
+              value = element.textContent?.trim() || '';
+            }
+
+            // Apply regex if specified
+            if (selector.regexPattern && value) {
+              const regex = new RegExp(selector.regexPattern, 'i');
+              const match = value.match(regex);
+              value = match ? (match[1] || match[0]) : value;
+            }
+
+            return value;
+          }
+        }
+        break;
+
+      case 'JS_PATH':
+        if (selector.selector) {
+          try {
+            const result = eval(selector.selector);
+            let value = String(result || '');
+            
+            // Apply regex if specified
+            if (selector.regexPattern && value) {
+              const regex = new RegExp(selector.regexPattern, 'i');
+              const match = value.match(regex);
+              value = match ? (match[1] || match[0]) : value;
+            }
+
+            return value;
+          } catch (error) {
+            console.warn('JS path evaluation error:', error);
+            return null;
+          }
+        }
+        break;
     }
 
     return null;
@@ -167,11 +244,17 @@ export class DataExtractor {
       case 'SALE_PRICE':
         data.salePrice = this.parsePrice(value);
         break;
+      case 'CURRENCY':
+        data.currency = value;
+        break;
       case 'SKU':
         data.sku = value;
         break;
       case 'UPC':
         data.upc = value;
+        break;
+      case 'MODEL':
+        data.model = value;
         break;
       case 'BRAND':
         data.brand = value;
@@ -187,6 +270,24 @@ export class DataExtractor {
         break;
       case 'IN_STOCK':
         data.inStock = this.parseBoolean(value);
+        break;
+      case 'RATING':
+        data.rating = parseFloat(value) || undefined;
+        break;
+      case 'REVIEW_COUNT':
+        data.reviewCount = parseInt(value) || undefined;
+        break;
+      case 'SALE_START_DATE':
+        data.saleStartDate = value;
+        break;
+      case 'SALE_END_DATE':
+        data.saleEndDate = value;
+        break;
+      case 'UNIT_PRICE':
+        data.unitPrice = this.parsePrice(value);
+        break;
+      case 'UNIT_TYPE':
+        data.unitType = value;
         break;
     }
   }

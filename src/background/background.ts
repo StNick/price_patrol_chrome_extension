@@ -65,6 +65,10 @@ async function handleBackgroundMessage(message: any, sender: chrome.runtime.Mess
       const updated = await updateRecipes();
       return { success: updated };
       
+    case 'AUTO_SUBMIT_TOGGLED':
+      console.log('Auto-submit toggled:', message.enabled);
+      return { success: true };
+      
     default:
       return { error: 'Unknown action' };
   }
@@ -150,18 +154,54 @@ async function updateRecipes(): Promise<boolean> {
 }
 
 async function findRecipesForUrl(url: string): Promise<any[]> {
-  const recipes = await getRecipes();
-  return recipes.filter((recipe: any) => {
-    if (!recipe.isActive) return false;
+  const result = await chrome.storage.local.get(['authToken']);
+  const token = result.authToken;
+  
+  if (!token) {
+    console.log('No auth token, cannot fetch recipes for URL');
+    return [];
+  }
+  
+  // Determine API URL based on environment
+  const manifest = chrome.runtime.getManifest();
+  const isDev = manifest.name.includes('Dev');
+  const API_BASE_URL = isDev ? 'http://localhost:3000/api/v1' : 'https://www.pricepatrol.co.nz/api/v1';
+  
+  try {
+    const encodedUrl = encodeURIComponent(url);
+    const response = await fetch(`${API_BASE_URL}/scraping-recipes/find-by-url?url=${encodedUrl}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
     
-    try {
-      const regex = new RegExp(recipe.urlPattern, 'i');
-      return regex.test(url);
-    } catch (e) {
-      console.warn(`Invalid regex pattern in recipe ${recipe.id}:`, recipe.urlPattern);
-      return false;
+    if (!response.ok) {
+      console.error(`Recipe fetch failed: ${response.status}`);
+      return [];
     }
-  });
+    
+    const data = await response.json();
+    
+    // Handle both wrapped and direct array responses
+    let matches;
+    if (data.success && data.data) {
+      matches = data.data;
+    } else if (Array.isArray(data)) {
+      matches = data;
+    } else {
+      console.error('Unexpected response format:', data);
+      return [];
+    }
+    
+    // Extract recipes from matches and sort by confidence
+    return matches
+      .sort((a: any, b: any) => (b.confidence || 0) - (a.confidence || 0))
+      .map((match: any) => match.recipe || match);
+  } catch (error) {
+    console.error('Failed to fetch recipes for URL:', error);
+    return [];
+  }
 }
 
 function shouldUpdateRecipes(lastUpdate: number): boolean {

@@ -1,4 +1,4 @@
-import { ApiResponse, LoginResponse, User, Recipe } from '../types';
+import { ApiResponse, LoginResponse, User, Recipe, ScrapingRecipeMatch } from '../types';
 import { StorageManager } from './storage';
 
 export class ApiClient {
@@ -59,9 +59,9 @@ export class ApiClient {
     return this.request<Recipe[]>('/scraping-recipes');
   }
 
-  static async findRecipesByUrl(url: string): Promise<ApiResponse<Recipe[]>> {
+  static async findRecipesByUrl(url: string): Promise<ApiResponse<ScrapingRecipeMatch[]>> {
     const encodedUrl = encodeURIComponent(url);
-    return this.request<Recipe[]>(`/scraping-recipes/find-by-url?url=${encodedUrl}`);
+    return this.request<ScrapingRecipeMatch[]>(`/scraping-recipes/find-by-url?url=${encodedUrl}`);
   }
 
   static async submitPriceData(data: any): Promise<ApiResponse<any>> {

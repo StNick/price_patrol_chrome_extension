@@ -43,6 +43,9 @@ class PricePatrolPopup {
         if (this.isLoggedIn && this.currentTab?.url) {
             await this.checkPageSupport();
         }
+        
+        // Load auto-submit preference
+        await this.loadAutoSubmitPreference();
     }
 
     async checkAuthStatus(): Promise<void> {
@@ -151,6 +154,9 @@ class PricePatrolPopup {
         // Extraction events
         document.getElementById('extract-btn')!.addEventListener('click', () => this.handleExtraction());
         document.getElementById('refresh-recipes-btn')!.addEventListener('click', () => this.handleRefreshRecipes());
+        
+        // Auto-submit checkbox
+        document.getElementById('auto-submit-checkbox')!.addEventListener('change', (e) => this.handleAutoSubmitToggle(e));
     }
 
     async handleLogin(): Promise<void> {
@@ -370,7 +376,7 @@ class PricePatrolPopup {
             const activeRecipes = recipes.filter((r: any) => r.isActive);
             
             // Count unique merchants
-            const uniqueMerchants = new Set(activeRecipes.map((r: any) => r.merchant.id));
+            const uniqueMerchants = new Set(activeRecipes.map((r: any) => r.merchantId));
             
             document.getElementById('supported-sites')!.textContent = uniqueMerchants.size.toString();
             document.getElementById('recipe-count')!.textContent = `${activeRecipes.length} extraction recipes available`;
@@ -426,6 +432,72 @@ class PricePatrolPopup {
         if (diffDays < 7) return `${diffDays}d ago`;
         
         return date.toLocaleDateString();
+    }
+
+    async loadAutoSubmitPreference(): Promise<void> {
+        try {
+            const result = await chrome.storage.local.get(['autoSubmitEnabled']);
+            const autoSubmitCheckbox = document.getElementById('auto-submit-checkbox') as HTMLInputElement;
+            if (autoSubmitCheckbox) {
+                autoSubmitCheckbox.checked = result.autoSubmitEnabled || false;
+            }
+        } catch (error) {
+            console.error('Failed to load auto-submit preference:', error);
+        }
+    }
+
+    async handleAutoSubmitToggle(event: Event): Promise<void> {
+        const checkbox = event.target as HTMLInputElement;
+        const isEnabled = checkbox.checked;
+        
+        try {
+            // Save preference to storage
+            await chrome.storage.local.set({ autoSubmitEnabled: isEnabled });
+            
+            // Notify background script about the change
+            await chrome.runtime.sendMessage({ 
+                action: 'AUTO_SUBMIT_TOGGLED', 
+                enabled: isEnabled 
+            });
+            
+            // Show feedback to user
+            if (isEnabled) {
+                this.showStatus('Auto-submit enabled - prices will be extracted automatically', 'success');
+            } else {
+                this.showStatus('Auto-submit disabled', 'success');
+            }
+            
+            // If enabling auto-submit and we're on a supported page, trigger extraction
+            if (isEnabled && this.isLoggedIn && this.currentTab?.url) {
+                const response = await chrome.runtime.sendMessage({
+                    action: 'GET_RECIPES_FOR_URL',
+                    url: this.currentTab.url
+                });
+                
+                if (response.recipes && response.recipes.length > 0) {
+                    // Trigger auto-extraction after a short delay
+                    setTimeout(async () => {
+                        await this.triggerAutoExtraction();
+                    }, 1000);
+                }
+            }
+        } catch (error) {
+            console.error('Failed to toggle auto-submit:', error);
+            this.showStatus('Failed to save auto-submit preference', 'error');
+        }
+    }
+
+    async triggerAutoExtraction(): Promise<void> {
+        if (!this.currentTab?.id) return;
+        
+        try {
+            // Send auto-extraction message to content script
+            await chrome.tabs.sendMessage(this.currentTab.id, {
+                action: 'AUTO_EXTRACT_DATA'
+            });
+        } catch (error) {
+            console.error('Failed to trigger auto-extraction:', error);
+        }
     }
 
     setupEnvironmentLinks(): void {

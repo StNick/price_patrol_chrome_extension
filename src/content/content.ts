@@ -14,6 +14,9 @@ async function handleContentMessage(message: any): Promise<any> {
     case 'CHECK_PAGE_SUPPORT':
       return await checkPageSupport();
       
+    case 'AUTO_EXTRACT_DATA':
+      return await handleAutoExtraction();
+      
     default:
       return { error: 'Unknown action' };
   }
@@ -89,10 +92,65 @@ async function checkPageSupport(): Promise<any> {
   };
 }
 
+async function handleAutoExtraction(): Promise<any> {
+  try {
+    console.log('Auto-extraction triggered for:', window.location.href);
+    
+    // Check if auto-submit is enabled
+    const autoSubmitResult = await chrome.storage.local.get(['autoSubmitEnabled']);
+    if (!autoSubmitResult.autoSubmitEnabled) {
+      console.log('Auto-submit is disabled, skipping auto-extraction');
+      return { success: false, error: 'Auto-submit disabled' };
+    }
+    
+    // Check cache before proceeding
+    const shouldExtract = await shouldPerformExtraction(window.location.href);
+    if (!shouldExtract.extract) {
+      console.log('Skipping extraction:', shouldExtract.reason);
+      return { success: false, error: shouldExtract.reason };
+    }
+    
+    // Get recipes for current URL
+    const response = await chrome.runtime.sendMessage({
+      action: 'GET_RECIPES_FOR_URL',
+      url: window.location.href
+    });
+    
+    if (!response.recipes || response.recipes.length === 0) {
+      console.log('No recipes found for auto-extraction');
+      return { success: false, error: 'No recipes found' };
+    }
+    
+    // Use the first available recipe for auto-extraction
+    const recipe = response.recipes[0];
+    console.log('Auto-extracting with recipe:', recipe.name);
+    
+    // Perform extraction
+    const result = await extractData(recipe);
+    
+    if (result.success) {
+      // Cache the successful extraction
+      await cacheExtraction(window.location.href, result.extractedData, recipe.merchantId);
+      showNotification('Price data auto-extracted and submitted successfully!', 'success');
+    } else {
+      console.warn('Auto-extraction failed:', result.error);
+    }
+    
+    return result;
+    
+  } catch (error) {
+    console.error('Auto-extraction failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Auto-extraction failed'
+    };
+  }
+}
+
 async function extractFromPage(recipe: any, url: string): Promise<any> {
   const extractedData: any = {
     url,
-    merchantId: recipe.merchant.id,
+    merchantId: recipe.merchantId,
     source: 'MANUAL', // Changed from 'EXTENSION' as it was invalid
     priceSource: 'WEBSITE'
   };
@@ -159,7 +217,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
   console.log(`Extraction method: ${selector.extractionMethod}`);
   console.log(`Selector value: ${selector.selector}`);
   console.log(`Attribute: ${selector.attributeName}`);
-  console.log(`Regex: ${selector.regex}`);
+  console.log(`Regex: ${selector.regexPattern}`);
 
   // Handle different extraction methods
   switch (selector.extractionMethod) {
@@ -172,9 +230,9 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
       }
       break;
 
-    case 'CSS_SELECTOR':
+    case 'TEXT':
       if (selector.selector) {
-        console.log(`Using CSS selector: ${selector.selector}`);
+        console.log(`Using text selector: ${selector.selector}`);
         const element = document.querySelector(selector.selector);
         console.log(`Found element:`, element);
         if (element) {
@@ -187,8 +245,8 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
           }
 
           // Apply regex if specified
-          if (selector.regex && value) {
-            const regex = new RegExp(selector.regex, 'i');
+          if (selector.regexPattern && value) {
+            const regex = new RegExp(selector.regexPattern, 'i');
             const match = value.match(regex);
             value = match ? (match[1] || match[0]) : value;
           }
@@ -221,8 +279,8 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
           }
 
           // Apply regex if specified
-          if (selector.regex && value) {
-            const regex = new RegExp(selector.regex, 'i');
+          if (selector.regexPattern && value) {
+            const regex = new RegExp(selector.regexPattern, 'i');
             const match = value.match(regex);
             value = match ? (match[1] || match[0]) : value;
           }
@@ -232,23 +290,87 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
       }
       break;
 
-    case 'TEXT':
-      // For TEXT extraction, we might need to look at the whole page or use a specific selector
+    case 'ATTRIBUTE':
       if (selector.selector) {
-        console.log(`Using text selector: ${selector.selector}`);
+        console.log(`Using attribute selector: ${selector.selector}`);
         const element = document.querySelector(selector.selector);
-        console.log(`Found text element:`, element);
-        if (element) {
-          let value = element.textContent?.trim() || '';
+        console.log(`Found attribute element:`, element);
+        if (element && selector.attributeName) {
+          let value = element.getAttribute(selector.attributeName) || '';
           
           // Apply regex if specified
-          if (selector.regex && value) {
-            const regex = new RegExp(selector.regex, 'i');
+          if (selector.regexPattern && value) {
+            const regex = new RegExp(selector.regexPattern, 'i');
             const match = value.match(regex);
             value = match ? (match[1] || match[0]) : value;
           }
 
           return value;
+        }
+      }
+      break;
+
+    case 'REGEX':
+      // For regex extraction, apply regex to the entire page or specific element
+      if (selector.regexPattern) {
+        console.log(`Using regex pattern: ${selector.regexPattern}`);
+        let searchText = document.body.textContent || '';
+        
+        // If a selector is provided, search within that element
+        if (selector.selector) {
+          const element = document.querySelector(selector.selector);
+          if (element) {
+            searchText = element.textContent || '';
+          }
+        }
+        
+        const regex = new RegExp(selector.regexPattern, 'i');
+        const match = searchText.match(regex);
+        if (match) {
+          return match[1] || match[0];
+        }
+      }
+      break;
+
+    case 'INNER_HTML':
+      if (selector.selector) {
+        console.log(`Using inner HTML selector: ${selector.selector}`);
+        const element = document.querySelector(selector.selector);
+        console.log(`Found inner HTML element:`, element);
+        if (element) {
+          let value = element.innerHTML || '';
+          
+          // Apply regex if specified
+          if (selector.regexPattern && value) {
+            const regex = new RegExp(selector.regexPattern, 'i');
+            const match = value.match(regex);
+            value = match ? (match[1] || match[0]) : value;
+          }
+
+          return value;
+        }
+      }
+      break;
+
+    case 'JS_PATH':
+      // For JS_PATH, evaluate JavaScript path (like window.dataLayer[0].product)
+      if (selector.selector) {
+        console.log(`Using JS path: ${selector.selector}`);
+        try {
+          const result = eval(selector.selector);
+          let value = String(result || '');
+          
+          // Apply regex if specified
+          if (selector.regexPattern && value) {
+            const regex = new RegExp(selector.regexPattern, 'i');
+            const match = value.match(regex);
+            value = match ? (match[1] || match[0]) : value;
+          }
+
+          return value;
+        } catch (error) {
+          console.warn('JS path evaluation error:', error);
+          return null;
         }
       }
       break;
@@ -354,7 +476,33 @@ function assignFieldValue(data: any, fieldName: string, value: string): void {
     case 'MODEL':
       data.model = value;
       break;
-    // Removed IMAGE_URL and IN_STOCK as they're not used in the API
+    case 'CURRENCY':
+      data.currency = value;
+      break;
+    case 'IMAGE_URL':
+      data.imageUrl = normalizeImageUrl(value);
+      break;
+    case 'IN_STOCK':
+      data.inStock = parseBoolean(value);
+      break;
+    case 'RATING':
+      data.rating = parseFloat(value) || undefined;
+      break;
+    case 'REVIEW_COUNT':
+      data.reviewCount = parseInt(value) || undefined;
+      break;
+    case 'SALE_START_DATE':
+      data.saleStartDate = value;
+      break;
+    case 'SALE_END_DATE':
+      data.saleEndDate = value;
+      break;
+    case 'UNIT_PRICE':
+      data.unitPrice = parsePrice(value);
+      break;
+    case 'UNIT_TYPE':
+      data.unitType = value;
+      break;
   }
 }
 
@@ -407,6 +555,144 @@ function parseBoolean(value: string): boolean | undefined {
   }
   
   return undefined;
+}
+
+// Auto-extraction on page load
+async function initAutoExtraction(): Promise<void> {
+  try {
+    // Wait a bit for page to fully load
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Check if auto-submit is enabled
+    const autoSubmitResult = await chrome.storage.local.get(['autoSubmitEnabled']);
+    if (!autoSubmitResult.autoSubmitEnabled) {
+      console.log('Auto-submit disabled, skipping page load auto-extraction');
+      return;
+    }
+    
+    // Check if user is logged in
+    const authResult = await chrome.storage.local.get(['authToken']);
+    if (!authResult.authToken) {
+      console.log('User not logged in, skipping auto-extraction');
+      return;
+    }
+    
+    // Trigger auto-extraction
+    await handleAutoExtraction();
+    
+  } catch (error) {
+    console.error('Failed to initialize auto-extraction:', error);
+  }
+}
+
+// Start auto-extraction check when page loads
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initAutoExtraction);
+} else {
+  // Page already loaded
+  initAutoExtraction();
+}
+
+// Cache management functions
+async function shouldPerformExtraction(url: string): Promise<{extract: boolean, reason: string}> {
+  try {
+    const result = await chrome.storage.local.get(['extractionCache']);
+    const cache: any[] = result.extractionCache || [];
+    
+    // Normalize URL (remove query params and fragments for caching)
+    const normalizedUrl = normalizeUrlForCache(url);
+    
+    // Find existing cache entry
+    const cacheEntry = cache.find(entry => entry.url === normalizedUrl);
+    
+    if (!cacheEntry) {
+      return { extract: true, reason: 'No cache entry found' };
+    }
+    
+    // Check if enough time has passed (configurable, default 1 hour)
+    const cacheExpiryMs = 60 * 60 * 1000; // 1 hour
+    const timeSinceLastExtraction = Date.now() - cacheEntry.lastExtracted;
+    
+    if (timeSinceLastExtraction > cacheExpiryMs) {
+      return { extract: true, reason: 'Cache expired' };
+    }
+    
+    return { extract: false, reason: 'Recently extracted (cached)' };
+    
+  } catch (error) {
+    console.error('Error checking extraction cache:', error);
+    return { extract: true, reason: 'Cache check failed' };
+  }
+}
+
+async function cacheExtraction(url: string, extractedData: any, merchantId: string): Promise<void> {
+  try {
+    const result = await chrome.storage.local.get(['extractionCache']);
+    let cache: any[] = result.extractionCache || [];
+    
+    // Normalize URL
+    const normalizedUrl = normalizeUrlForCache(url);
+    
+    // Create data hash (simple hash of key price data)
+    const dataHash = createDataHash(extractedData);
+    
+    // Remove existing entry for this URL
+    cache = cache.filter(entry => entry.url !== normalizedUrl);
+    
+    // Add new cache entry
+    cache.push({
+      url: normalizedUrl,
+      lastExtracted: Date.now(),
+      dataHash: dataHash,
+      merchantId: merchantId
+    });
+    
+    // Keep only the last 100 entries to prevent storage bloat
+    if (cache.length > 100) {
+      cache = cache
+        .sort((a, b) => b.lastExtracted - a.lastExtracted)
+        .slice(0, 100);
+    }
+    
+    // Save updated cache
+    await chrome.storage.local.set({ extractionCache: cache });
+    console.log('Cached extraction for:', normalizedUrl);
+    
+  } catch (error) {
+    console.error('Error caching extraction:', error);
+  }
+}
+
+function normalizeUrlForCache(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    // Remove query parameters and fragments for caching
+    // Keep the path to distinguish between different product pages
+    return `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
+  } catch (error) {
+    console.error('Error normalizing URL:', error);
+    return url;
+  }
+}
+
+function createDataHash(data: any): string {
+  // Create a simple hash of the important price data
+  const hashableData = {
+    price: data.price,
+    salePrice: data.salePrice,
+    sku: data.sku,
+    product: data.product,
+    inStock: data.inStock
+  };
+  
+  const str = JSON.stringify(hashableData);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return hash.toString();
 }
 
 async function submitPriceData(data: any): Promise<any> {
