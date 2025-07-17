@@ -1,0 +1,15 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="62" fill="#4F46E5" stroke="#3730A3" stroke-width="2"/>
+  
+  <!-- Price tag shape -->
+  <path d="M25.6 38.4 L76.8 38.4 L89.6 51.2 L89.6 76.8 L76.8 89.6 L25.6 89.6 Z" 
+        fill="white" stroke="#3730A3" stroke-width="1"/>
+  
+  <!-- Price tag hole -->
+  <circle cx="44.8" cy="57.6" r="5.12" fill="#4F46E5"/>
+  
+  <!-- Dollar sign -->
+  <text x="57.6" y="76.8" text-anchor="middle" fill="#4F46E5" 
+        font-size="25.6" font-family="Arial, sans-serif" font-weight="bold">$</text>
+</svg>
