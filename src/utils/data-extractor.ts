@@ -205,14 +205,20 @@ export class DataExtractor {
       
       for (const part of parts) {
         if (part.includes('[') && part.includes(']')) {
-          const match = part.match(/^([^[]+)\[(\d+)\]$/);
-          if (match) {
-            const [, propertyName, index] = match;
+          // Extract property name and all array indices
+          const indices = Array.from(part.matchAll(/\[(\d+)\]/g), match => parseInt(match[1], 10));
+          const propertyName = part.split('[')[0];
+          
+          if (indices.length > 0 && propertyName) {
             current = current[propertyName];
-            if (Array.isArray(current)) {
-              current = current[parseInt(index, 10)];
-            } else {
-              return null;
+            
+            // Apply each array index consecutively
+            for (const index of indices) {
+              if (Array.isArray(current)) {
+                current = current[index];
+              } else {
+                return null;
+              }
             }
           } else {
             return null;
@@ -260,7 +266,7 @@ export class DataExtractor {
         data.brand = value;
         break;
       case 'CATEGORY':
-        data.category = value;
+        data.category = this.sanitizeCategory(value);
         break;
       case 'DESCRIPTION':
         data.description = value;
@@ -325,5 +331,16 @@ export class DataExtractor {
     }
     
     return undefined;
+  }
+
+  private static sanitizeCategory(value: string): string {
+    if (!value) return value;
+    
+    // Split by line breaks, trim each line, filter out empty lines, then rejoin
+    return value
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .join('\n');
   }
 }
