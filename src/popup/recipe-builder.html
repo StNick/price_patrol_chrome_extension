@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Price Patrol - Recipe Builder</title>
+    <link rel="stylesheet" href="recipe-builder.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Recipe Builder</h1>
+            <div id="page-url" class="url-text"></div>
+            <div class="header-actions">
+                <button id="refresh-page-btn" class="btn btn-small btn-secondary">Refresh Page Data</button>
+                <span class="environment-indicator" id="env-indicator"></span>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loading-section" class="loading-section">
+            <div class="spinner"></div>
+            <p>Loading page data and extracting structured information...</p>
+        </div>
+
+        <!-- Main Interface -->
+        <div id="main-interface" class="main-interface hidden">
+            <div class="mapping-container">
+                <div id="mapping-fields" class="mapping-fields-column">
+                    <h4>Field Mapping</h4>
+                    <div class="mapping-help">
+                        <p>Click on structured data keys on the right to automatically map fields, or manually enter selectors.</p>
+                    </div>
+                    <div id="field-mappings" class="field-mappings"></div>
+                </div>
+                
+                <div id="deep-search-results" class="deep-search-column">
+                    <h4>Structured Data <span class="help-text">(Click to map)</span></h4>
+                    <div class="search-tabs">
+                        <button class="tab-btn active" data-tab="jsonld">JSON-LD</button>
+                        <button class="tab-btn" data-tab="dataLayer">dataLayer</button>
+                        <button class="tab-btn" data-tab="meta">Meta Tags</button>
+                        <button class="tab-btn" data-tab="digitalData">digitalData</button>
+                    </div>
+                    <div id="deep-search-content" class="results-content"></div>
+                </div>
+                
+                <div id="test-results-column" class="test-results-column">
+                    <h4>Test Results</h4>
+                    <div class="test-controls">
+                        <button id="test-current-btn" class="btn btn-small btn-secondary">Test Current Recipe</button>
+                        <button id="clear-results-btn" class="btn btn-small btn-secondary">Clear</button>
+                    </div>
+                    <pre id="test-results-content" class="results-content"></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recipe Controls -->
+        <div class="recipe-controls" id="recipe-controls">
+            <div class="recipe-metadata">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="merchant-name">Merchant Name</label>
+                        <input type="text" id="merchant-name" placeholder="e.g., Amazon, eBay" class="input-field" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="recipe-name">Recipe Name</label>
+                        <input type="text" id="recipe-name" placeholder="e.g., Product Pages" class="input-field" required>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="url-pattern">URL Pattern</label>
+                        <input type="text" id="url-pattern" placeholder="Regex pattern (auto-generated)" class="input-field">
+                        <small class="help-text">Leave empty to auto-generate from current URL</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="page-types">Page Types</label>
+                        <select id="page-types" class="input-field" multiple>
+                            <option value="PRODUCT_PAGE" selected>Product Page</option>
+                            <option value="LISTING_PAGE">Listing Page</option>
+                            <option value="SEARCH_RESULTS">Search Results</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="recipe-description">Description</label>
+                    <textarea id="recipe-description" placeholder="Describe this recipe and any special considerations" class="input-field" rows="3"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="change-log">Change Log</label>
+                    <textarea id="change-log" placeholder="Describe changes made in this version" class="input-field" rows="2"></textarea>
+                </div>
+            </div>
+            
+            <!-- Version Warning (for editing existing recipes) -->
+            <div id="version-warning" class="version-warning hidden">
+                <div class="warning-icon">⚠️</div>
+                <div class="warning-content">
+                    <strong>Version Update Warning:</strong>
+                    <p>Saving changes will create a new version and permanently overwrite the current recipe. Previous selector configurations cannot be restored. Be sure to test thoroughly before saving!</p>
+                </div>
+            </div>
+            
+            <div class="action-buttons">
+                <button id="test-recipe-btn" class="btn btn-secondary">Test Complete Recipe</button>
+                <button id="save-recipe-btn" class="btn btn-success" disabled>Save Recipe</button>
+                <button id="cancel-btn" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Status Messages -->
+        <div id="status-message" class="status-message hidden"></div>
+    </div>
+
+    <script src="recipe-builder.js"></script>
+</body>
+</html>

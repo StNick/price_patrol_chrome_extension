@@ -244,4 +244,50 @@ The extension uses different manifests and configurations based on build mode:
 3. Update recipe processing in background worker
 4. Coordinate with backend recipe management system
 
+## Admin Recipe Builder Features
+
+The extension now includes comprehensive recipe building capabilities for ADMIN users:
+
+### Admin-Only UI Components
+- **Recipe Management Section**: Shows in popup for ADMIN users only
+- **Admin Badge**: Visual indicator of admin privileges
+- **Create Recipe Button**: Opens recipe builder in new tab
+- **Existing Recipes List**: Shows recipes for current site with test/edit actions
+- **Recipe Test Results**: Displays extraction results with copy functionality
+
+### Recipe Builder Interface (`popup/recipe-builder.html`)
+- **Three-Column Layout**: Field Mapping | Structured Data | Test Results
+- **Deep Search Extraction**: Automatically extracts JSON-LD, dataLayer, meta tags, digitalData
+- **Visual Field Mapping**: Click-to-map interface for structured data
+- **Real-time Testing**: Test recipe against live page data
+- **Multiple Extraction Methods**: Structured Data, CSS Selectors, XPath, Regex, Attributes
+- **Auto URL Pattern Generation**: Smart pattern creation from current URL
+- **Version Management**: Edit existing recipes with versioning warnings
+
+### Content Script Enhancements
+- **Deep Search Data Extraction**: `EXTRACT_DEEP_SEARCH_DATA` message handler
+- **Recipe Testing**: `TEST_RECIPE` message handler for live testing
+- **Structured Data Parsers**: JSON-LD, dataLayer, meta tags, digitalData extraction
+- **Admin Function Isolation**: Admin features separate from regular extraction logic
+
+### Security Implementation
+- **Frontend Role Checks**: UI components hidden for non-admin users
+- **API-Level Security**: All recipe CRUD operations require ADMIN role at API level
+- **Token Validation**: Admin access verified on recipe builder load
+- **Double Security**: Even if frontend is modified, API rejects non-admin requests
+
+### Development Workflow
+1. **Admin Login**: Admin users see recipe management section in popup
+2. **Navigate to Target Page**: Visit merchant product page to build recipe for
+3. **Create Recipe**: Click "Create Recipe" to open builder in new tab
+4. **Deep Search**: Automatic extraction of all structured data from page
+5. **Map Fields**: Click structured data paths to map to product fields
+6. **Test Recipe**: Real-time testing against live page data
+7. **Save Recipe**: Complete recipe with merchant info and URL patterns
+
+### Build System Updates
+- **New Files Included**: recipe-builder.html, recipe-builder.css, recipe-builder.js
+- **Manifest Updates**: Added "tabs" permission and web_accessible_resources
+- **TypeScript Compilation**: recipe-builder.ts compiled alongside other scripts
+
 This architecture supports rapid development while maintaining code quality, security, and user experience across different environments and merchant integrations.

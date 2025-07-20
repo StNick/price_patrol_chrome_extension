@@ -157,6 +157,11 @@ class PricePatrolPopup {
         
         // Auto-submit checkbox
         document.getElementById('auto-submit-checkbox')!.addEventListener('change', (e) => this.handleAutoSubmitToggle(e));
+        
+        // Admin events
+        document.getElementById('create-recipe-btn')!.addEventListener('click', () => this.handleCreateRecipe());
+        document.getElementById('copy-test-results-btn')!.addEventListener('click', () => this.handleCopyTestResults());
+        document.getElementById('close-admin-test-btn')!.addEventListener('click', () => this.handleCloseAdminTest());
     }
 
     async handleLogin(): Promise<void> {
@@ -204,7 +209,10 @@ class PricePatrolPopup {
 
                 this.showStatus('Login successful!', 'success');
             } else {
-                this.showError(response.error || 'Login failed');
+                const errorMessage = typeof response.error === 'string' 
+                    ? response.error 
+                    : (response.error?.message || 'Login failed');
+                this.showError(errorMessage);
             }
         } catch (error) {
             console.error('Login error:', error);
@@ -400,14 +408,24 @@ class PricePatrolPopup {
         const authSection = document.getElementById('auth-section')!;
         const mainSection = document.getElementById('main-section')!;
         const userEmailSpan = document.getElementById('user-email')!;
+        const adminRecipeSection = document.getElementById('admin-recipe-section')!;
 
         if (this.isLoggedIn && this.currentUser) {
             authSection.classList.add('hidden');
             mainSection.classList.remove('hidden');
             userEmailSpan.textContent = this.currentUser.email;
+            
+            // Show admin recipe builder for ADMIN users
+            if (this.currentUser.role === 'ADMIN') {
+                adminRecipeSection.classList.remove('hidden');
+                this.checkAdminRecipes();
+            } else {
+                adminRecipeSection.classList.add('hidden');
+            }
         } else {
             authSection.classList.remove('hidden');
             mainSection.classList.add('hidden');
+            adminRecipeSection.classList.add('hidden');
         }
     }
 
@@ -518,9 +536,121 @@ class PricePatrolPopup {
             envIndicator.className = `environment-indicator ${isDev ? 'dev' : 'prod'}`;
         }
     }
+
+    // Admin Recipe Builder Methods
+    async checkAdminRecipes(): Promise<void> {
+        if (!this.currentTab?.url) return;
+        
+        try {
+            const response = await this.apiRequest(`/scraping-recipes/find-by-url?url=${encodeURIComponent(this.currentTab.url)}`);
+            
+            if (response.success && response.data && response.data.length > 0) {
+                this.displayAdminRecipes(response.data);
+            } else {
+                // Hide existing recipes section if no recipes found
+                document.getElementById('admin-existing-recipes')!.classList.add('hidden');
+            }
+        } catch (error) {
+            console.error('Failed to check admin recipes:', error);
+        }
+    }
+
+    displayAdminRecipes(recipes: any[]): void {
+        const existingRecipesSection = document.getElementById('admin-existing-recipes')!;
+        const recipesList = document.getElementById('admin-recipes-list')!;
+        
+        recipesList.innerHTML = '';
+        
+        recipes.forEach(recipe => {
+            const recipeItem = document.createElement('div');
+            recipeItem.className = 'recipe-item';
+            
+            recipeItem.innerHTML = `
+                <div>
+                    <div class="recipe-name">${recipe.name}</div>
+                    <div class="recipe-version">v${recipe.version}</div>
+                </div>
+                <div class="recipe-actions">
+                    <button class="btn btn-small btn-secondary" onclick="pricePatrolPopup.testRecipe('${recipe.id}')">Test</button>
+                    <button class="btn btn-small btn-primary" onclick="pricePatrolPopup.editRecipe('${recipe.id}')">Edit</button>
+                </div>
+            `;
+            
+            recipesList.appendChild(recipeItem);
+        });
+        
+        existingRecipesSection.classList.remove('hidden');
+    }
+
+    async testRecipe(recipeId: string): Promise<void> {
+        if (!this.currentTab?.id) return;
+        
+        try {
+            // Get the recipe details
+            const recipeResponse = await this.apiRequest(`/scraping-recipes/${recipeId}`);
+            if (!recipeResponse.success) {
+                throw new Error('Failed to load recipe');
+            }
+            
+            // Send test message to content script
+            const result = await chrome.tabs.sendMessage(this.currentTab.id, {
+                action: 'TEST_RECIPE',
+                recipe: recipeResponse.data
+            });
+            
+            if (result && result.success) {
+                this.displayTestResults(result.data);
+            } else {
+                throw new Error(result?.error || 'Test failed');
+            }
+        } catch (error) {
+            console.error('Recipe test failed:', error);
+            this.showStatus(`Recipe test failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+        }
+    }
+
+    displayTestResults(testData: any): void {
+        const testResultsSection = document.getElementById('admin-test-results')!;
+        const testContent = document.getElementById('admin-test-content')!;
+        
+        testContent.textContent = JSON.stringify(testData, null, 2);
+        testResultsSection.classList.remove('hidden');
+    }
+
+    editRecipe(recipeId: string): void {
+        // Open recipe builder in new tab with recipe ID for editing
+        const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html') + `?recipeId=${recipeId}&url=${encodeURIComponent(this.currentTab?.url || '')}`;
+        chrome.tabs.create({ url: builderUrl });
+    }
+
+    handleCreateRecipe(): void {
+        // Open recipe builder in new tab for creating new recipe
+        const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html') + `?url=${encodeURIComponent(this.currentTab?.url || '')}`;
+        chrome.tabs.create({ url: builderUrl });
+    }
+
+    handleCopyTestResults(): void {
+        const testContent = document.getElementById('admin-test-content') as HTMLPreElement;
+        if (testContent && testContent.textContent) {
+            navigator.clipboard.writeText(testContent.textContent).then(() => {
+                this.showStatus('Test results copied to clipboard', 'success');
+            }).catch(error => {
+                console.error('Failed to copy test results:', error);
+                this.showStatus('Failed to copy test results', 'error');
+            });
+        }
+    }
+
+    handleCloseAdminTest(): void {
+        const testResultsSection = document.getElementById('admin-test-results')!;
+        testResultsSection.classList.add('hidden');
+    }
 }
+
+// Global reference for onclick handlers
+let pricePatrolPopup: PricePatrolPopup;
 
 // Initialize popup when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new PricePatrolPopup();
+    pricePatrolPopup = new PricePatrolPopup();
 });

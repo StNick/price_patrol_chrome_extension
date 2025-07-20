@@ -18,10 +18,13 @@ copyFile(manifestSource, 'manifest.json');
 // Copy static files
 copyFile('src/popup/popup.html', 'popup/popup.html');
 copyFile('src/popup/popup.css', 'popup/popup.css');
+copyFile('src/popup/recipe-builder.html', 'popup/recipe-builder.html');
+copyFile('src/popup/recipe-builder.css', 'popup/recipe-builder.css');
 copyFile('src/content/content.css', 'content/content.css');
 
 // Process JavaScript files (already compiled by TypeScript)
 processJsFile('dist-temp/popup/popup.js', 'popup/popup.js');
+processJsFile('dist-temp/popup/recipe-builder.js', 'popup/recipe-builder.js');
 processJsFile('dist-temp/content/content.js', 'content/content.js');
 processJsFile('dist-temp/background/background.js', 'background/background.js');
 

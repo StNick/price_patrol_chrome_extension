@@ -67,6 +67,37 @@
                         <p>This page doesn't have extraction recipes yet. We're constantly adding support for new merchants!</p>
                     </div>
                 </div>
+
+                <!-- Admin Recipe Builder Section (only visible to ADMIN users) -->
+                <div id="admin-recipe-section" class="admin-recipe-section hidden">
+                    <div class="admin-section-header">
+                        <h3>Recipe Management</h3>
+                        <span class="admin-badge">ADMIN</span>
+                    </div>
+                    
+                    <div class="recipe-builder-actions">
+                        <button id="create-recipe-btn" class="btn btn-primary">
+                            <span class="btn-icon">🛠️</span>
+                            Create Recipe
+                        </button>
+                        
+                        <!-- Existing Recipes Section (for admin editing) -->
+                        <div id="admin-existing-recipes" class="admin-existing-recipes hidden">
+                            <h4>Existing Recipes for this Site</h4>
+                            <div id="admin-recipes-list" class="admin-recipes-list"></div>
+                        </div>
+                        
+                        <!-- Recipe Test Results Section -->
+                        <div id="admin-test-results" class="admin-test-results hidden">
+                            <h4>Recipe Test Results</h4>
+                            <pre id="admin-test-content" class="test-content"></pre>
+                            <div class="test-actions">
+                                <button id="copy-test-results-btn" class="btn btn-small btn-secondary">Copy Results</button>
+                                <button id="close-admin-test-btn" class="btn btn-small btn-secondary">Close</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="stats-section">
