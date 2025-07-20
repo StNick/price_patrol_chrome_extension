@@ -434,7 +434,7 @@ class PricePatrolPopup {
         errorDiv.textContent = message;
     }
 
-    showStatus(message: string, type: 'success' | 'error'): void {
+    showStatus(message: string, type: 'success' | 'error' | 'info'): void {
         console.log(`${type.toUpperCase()}: ${message}`);
     }
 
@@ -542,13 +542,26 @@ class PricePatrolPopup {
         if (!this.currentTab?.url) return;
         
         try {
-            const response = await this.apiRequest(`/scraping-recipes/find-by-url?url=${encodeURIComponent(this.currentTab.url)}`);
+            // Use the same background script logic as regular page support detection
+            const response = await chrome.runtime.sendMessage({
+                action: 'GET_RECIPES_FOR_URL',
+                url: this.currentTab.url
+            });
             
-            if (response.success && response.data && response.data.length > 0) {
-                this.displayAdminRecipes(response.data);
+            console.log('Admin recipe check response:', response);
+            
+            const recipes = response.recipes || [];
+            
+            if (recipes.length > 0) {
+                this.displayAdminRecipes(recipes);
             } else {
                 // Hide existing recipes section if no recipes found
                 document.getElementById('admin-existing-recipes')!.classList.add('hidden');
+                
+                // Reset the create button
+                const createBtn = document.getElementById('create-recipe-btn')!;
+                createBtn.innerHTML = '<span class="btn-icon">🛠️</span>Create Recipe';
+                createBtn.onclick = () => this.handleCreateRecipe();
             }
         } catch (error) {
             console.error('Failed to check admin recipes:', error);
@@ -558,8 +571,18 @@ class PricePatrolPopup {
     displayAdminRecipes(recipes: any[]): void {
         const existingRecipesSection = document.getElementById('admin-existing-recipes')!;
         const recipesList = document.getElementById('admin-recipes-list')!;
+        const createBtn = document.getElementById('create-recipe-btn')!;
         
         recipesList.innerHTML = '';
+        
+        // Update the main button text based on whether recipes exist
+        if (recipes.length > 0) {
+            createBtn.innerHTML = '<span class="btn-icon">✏️</span>Edit Recipe';
+            createBtn.onclick = () => this.editRecipe(recipes[0].id); // Edit first recipe
+        } else {
+            createBtn.innerHTML = '<span class="btn-icon">🛠️</span>Create Recipe';
+            createBtn.onclick = () => this.handleCreateRecipe();
+        }
         
         recipes.forEach(recipe => {
             const recipeItem = document.createElement('div');
@@ -570,10 +593,6 @@ class PricePatrolPopup {
                     <div class="recipe-name">${recipe.name}</div>
                     <div class="recipe-version">v${recipe.version}</div>
                 </div>
-                <div class="recipe-actions">
-                    <button class="btn btn-small btn-secondary" onclick="pricePatrolPopup.testRecipe('${recipe.id}')">Test</button>
-                    <button class="btn btn-small btn-primary" onclick="pricePatrolPopup.editRecipe('${recipe.id}')">Edit</button>
-                </div>
             `;
             
             recipesList.appendChild(recipeItem);
@@ -582,51 +601,161 @@ class PricePatrolPopup {
         existingRecipesSection.classList.remove('hidden');
     }
 
-    async testRecipe(recipeId: string): Promise<void> {
-        if (!this.currentTab?.id) return;
-        
+
+    async editRecipe(recipeId: string): Promise<void> {
+        if (!this.currentTab?.id || !this.currentTab?.url) {
+            this.showStatus('No active tab found', 'error');
+            return;
+        }
+
         try {
-            // Get the recipe details
+            this.showStatus('Loading recipe and extracting page data...', 'info');
+            
+            // Get the recipe details first
             const recipeResponse = await this.apiRequest(`/scraping-recipes/${recipeId}`);
-            if (!recipeResponse.success) {
-                throw new Error('Failed to load recipe');
+            if (!recipeResponse || recipeResponse.error) {
+                throw new Error(recipeResponse?.error || 'Failed to load recipe');
             }
             
-            // Send test message to content script
-            const result = await chrome.tabs.sendMessage(this.currentTab.id, {
-                action: 'TEST_RECIPE',
-                recipe: recipeResponse.data
+            // Perform deep search on current tab using scripting API
+            const response = await chrome.scripting.executeScript({
+                target: { tabId: this.currentTab.id },
+                func: () => {
+                    // Extract JSON-LD
+                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+                    const jsonLdData: any[] = [];
+                    jsonLdScripts.forEach(script => {
+                        try {
+                            const content = script.textContent?.trim();
+                            if (content) {
+                                jsonLdData.push(JSON.parse(content));
+                            }
+                        } catch (error) {
+                            console.warn('Failed to parse JSON-LD:', error);
+                        }
+                    });
+
+                    // Extract dataLayer and digitalData
+                    const dataLayer = (window as any).dataLayer || [];
+                    const digitalData = (window as any).digitalData || {};
+
+                    // Extract meta tags
+                    const metaTags: { [key: string]: string } = {};
+                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+                    metaElements.forEach(meta => {
+                        const property = meta.getAttribute('property') || 
+                                        meta.getAttribute('name') || 
+                                        meta.getAttribute('itemprop');
+                        const content = meta.getAttribute('content');
+                        if (property && content) {
+                            metaTags[property] = content;
+                        }
+                    });
+
+                    return {
+                        jsonLd: jsonLdData,
+                        dataLayer: dataLayer,
+                        meta: metaTags,
+                        digitalData: digitalData
+                    };
+                }
+            });
+
+            const deepSearchData = response[0].result;
+            
+            // Store data in chrome.storage for the recipe builder
+            await chrome.storage.local.set({
+                deepSearchData: deepSearchData,
+                recipeBuilderUrl: this.currentTab.url,
+                authToken: (await chrome.storage.local.get(['authToken'])).authToken,
+                editingRecipe: recipeResponse
             });
             
-            if (result && result.success) {
-                this.displayTestResults(result.data);
-            } else {
-                throw new Error(result?.error || 'Test failed');
-            }
+            // Open recipe builder in new tab
+            const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html');
+            chrome.tabs.create({ url: builderUrl });
+            
+            this.showStatus('Recipe builder opened for editing!', 'success');
+            
         } catch (error) {
-            console.error('Recipe test failed:', error);
-            this.showStatus(`Recipe test failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            console.error('Failed to open recipe for editing:', error);
+            this.showStatus('Failed to load recipe for editing', 'error');
         }
     }
 
-    displayTestResults(testData: any): void {
-        const testResultsSection = document.getElementById('admin-test-results')!;
-        const testContent = document.getElementById('admin-test-content')!;
-        
-        testContent.textContent = JSON.stringify(testData, null, 2);
-        testResultsSection.classList.remove('hidden');
-    }
+    async handleCreateRecipe(): Promise<void> {
+        if (!this.currentTab?.id || !this.currentTab?.url) {
+            this.showStatus('No active tab found', 'error');
+            return;
+        }
 
-    editRecipe(recipeId: string): void {
-        // Open recipe builder in new tab with recipe ID for editing
-        const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html') + `?recipeId=${recipeId}&url=${encodeURIComponent(this.currentTab?.url || '')}`;
-        chrome.tabs.create({ url: builderUrl });
-    }
+        try {
+            this.showStatus('Extracting page data...', 'info');
+            
+            // Perform deep search on current tab using scripting API
+            const response = await chrome.scripting.executeScript({
+                target: { tabId: this.currentTab.id },
+                func: () => {
+                    // Extract JSON-LD
+                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+                    const jsonLdData: any[] = [];
+                    jsonLdScripts.forEach(script => {
+                        try {
+                            const content = script.textContent?.trim();
+                            if (content) {
+                                jsonLdData.push(JSON.parse(content));
+                            }
+                        } catch (error) {
+                            console.warn('Failed to parse JSON-LD:', error);
+                        }
+                    });
 
-    handleCreateRecipe(): void {
-        // Open recipe builder in new tab for creating new recipe
-        const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html') + `?url=${encodeURIComponent(this.currentTab?.url || '')}`;
-        chrome.tabs.create({ url: builderUrl });
+                    // Extract dataLayer and digitalData
+                    const dataLayer = (window as any).dataLayer || [];
+                    const digitalData = (window as any).digitalData || {};
+
+                    // Extract meta tags
+                    const metaTags: { [key: string]: string } = {};
+                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+                    metaElements.forEach(meta => {
+                        const property = meta.getAttribute('property') || 
+                                        meta.getAttribute('name') || 
+                                        meta.getAttribute('itemprop');
+                        const content = meta.getAttribute('content');
+                        if (property && content) {
+                            metaTags[property] = content;
+                        }
+                    });
+
+                    return {
+                        jsonLd: jsonLdData,
+                        dataLayer: dataLayer,
+                        meta: metaTags,
+                        digitalData: digitalData
+                    };
+                }
+            });
+
+            const deepSearchData = response[0].result;
+            
+            // Store data in chrome.storage for the recipe builder
+            await chrome.storage.local.set({
+                deepSearchData: deepSearchData,
+                recipeBuilderUrl: this.currentTab.url,
+                authToken: (await chrome.storage.local.get(['authToken'])).authToken,
+                editingRecipe: null  // Clear any previous recipe state for new recipe creation
+            });
+            
+            // Open recipe builder in new tab
+            const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html');
+            chrome.tabs.create({ url: builderUrl });
+            
+            this.showStatus('Recipe builder opened!', 'success');
+            
+        } catch (error) {
+            console.error('Failed to launch recipe builder:', error);
+            this.showStatus('Failed to extract page data', 'error');
+        }
     }
 
     handleCopyTestResults(): void {

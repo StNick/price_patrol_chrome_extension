@@ -47,10 +47,9 @@ class RecipeBuilder {
 
     private readonly EXTRACTION_METHODS = [
         { value: 'STRUCTURED_DATA', label: 'Structured Data' },
-        { value: 'TEXT', label: 'Text Content' },
-        { value: 'ATTRIBUTE', label: 'Attribute' },
+        { value: 'TEXT', label: 'CSS Selector' },
         { value: 'XPATH', label: 'XPath' },
-        { value: 'REGEX', label: 'Regex' }
+        { value: 'JS_PATH', label: 'JS Path' }
     ];
 
     constructor() {
@@ -76,17 +75,23 @@ class RecipeBuilder {
 
     async loadData(): Promise<void> {
         try {
-            // Get URL parameters
-            const urlParams = new URLSearchParams(window.location.search);
-            this.currentUrl = urlParams.get('url') || '';
-            const recipeId = urlParams.get('recipeId');
+            // Get data from chrome storage (set by popup)
+            const result = await chrome.storage.local.get(['deepSearchData', 'recipeBuilderUrl', 'authToken', 'editingRecipe']);
+            
+            if (!result.deepSearchData || !result.recipeBuilderUrl) {
+                this.showStatusMessage('No recipe data found. Please start from the extension popup on a merchant page.', 'error');
+                this.hideLoading();
+                return;
+            }
 
-            // Get auth token
-            const result = await chrome.storage.local.get(['authToken']);
+            this.deepSearchData = result.deepSearchData;
             this.authToken = result.authToken;
+            this.currentUrl = result.recipeBuilderUrl;
+            this.editingRecipe = result.editingRecipe;
 
             if (!this.authToken) {
                 this.showStatusMessage('Authentication required', 'error');
+                this.hideLoading();
                 return;
             }
 
@@ -94,23 +99,29 @@ class RecipeBuilder {
             const userResponse = await this.apiRequest('/auth/me');
             if (!userResponse.success || userResponse.data.role !== 'ADMIN') {
                 this.showStatusMessage('Admin access required for recipe builder', 'error');
+                this.hideLoading();
                 return;
             }
 
             // Update URL display
             document.getElementById('page-url')!.textContent = this.currentUrl;
 
-            // If editing existing recipe, load it
-            if (recipeId) {
-                await this.loadExistingRecipe(recipeId);
+            // If editing existing recipe, populate form
+            if (this.editingRecipe) {
+                this.populateFormWithRecipe(this.editingRecipe);
+                this.showVersionWarning();
             }
 
-            // Extract deep search data from the current tab
-            await this.extractDeepSearchData();
-            
-            // Initialize the interface
+            // Initialize the interface with loaded data
             this.displayMappingInterface();
+            this.displayDeepSearchData();
             this.hideLoading();
+
+            console.log('Recipe builder loaded with data:', {
+                url: this.currentUrl,
+                hasDeepSearchData: !!this.deepSearchData,
+                isEditing: !!this.editingRecipe
+            });
 
         } catch (error) {
             console.error('Failed to load data:', error);
@@ -152,7 +163,16 @@ class RecipeBuilder {
                 };
             }
 
-            return data;
+            // Handle both wrapped and direct responses
+            if (data.success !== undefined) {
+                return data; // Already wrapped
+            } else {
+                // Direct response, wrap it
+                return {
+                    success: true,
+                    data: data
+                };
+            }
         } catch (error) {
             return {
                 success: false,
@@ -161,41 +181,17 @@ class RecipeBuilder {
         }
     }
 
-    async extractDeepSearchData(): Promise<void> {
-        try {
-            // Get the active tab that opened this recipe builder
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: false });
-            if (!tab?.id) {
-                throw new Error('No active tab found');
-            }
-
-            // Inject content script to extract deep search data
-            const result = await chrome.tabs.sendMessage(tab.id, {
-                action: 'EXTRACT_DEEP_SEARCH_DATA'
-            });
-
-            if (result && result.success) {
-                this.deepSearchData = result.data;
-                this.displayDeepSearchData();
-            } else {
-                throw new Error(result?.error || 'Failed to extract data from page');
-            }
-        } catch (error) {
-            console.error('Deep search extraction failed:', error);
-            this.showStatusMessage('Failed to extract page data. Make sure you\'re on the target page.', 'error');
-        }
-    }
 
     async loadExistingRecipe(recipeId: string): Promise<void> {
         try {
             const response = await this.apiRequest(`/scraping-recipes/${recipeId}`);
-            if (response.success) {
-                this.editingRecipe = response.data;
-                this.populateFormWithRecipe(this.editingRecipe);
-                this.showVersionWarning();
-            } else {
-                throw new Error(response.error || 'Failed to load recipe');
+            if (!response || response.error) {
+                throw new Error(response?.error || 'Failed to load recipe');
             }
+            // Handle both wrapped and direct responses
+            this.editingRecipe = response.data || response;
+            this.populateFormWithRecipe(this.editingRecipe);
+            this.showVersionWarning();
         } catch (error) {
             console.error('Failed to load existing recipe:', error);
             this.showStatusMessage('Failed to load existing recipe', 'error');
@@ -229,6 +225,7 @@ class RecipeBuilder {
         document.getElementById('test-recipe-btn')!.addEventListener('click', () => this.handleTestRecipe());
         document.getElementById('test-current-btn')!.addEventListener('click', () => this.handleTestCurrent());
         document.getElementById('clear-results-btn')!.addEventListener('click', () => this.handleClearResults());
+        document.getElementById('clear-mappings-btn')!.addEventListener('click', () => this.handleClearMappings());
         document.getElementById('cancel-btn')!.addEventListener('click', () => this.handleCancel());
         document.getElementById('refresh-page-btn')!.addEventListener('click', () => this.handleRefreshPage());
 
@@ -305,6 +302,14 @@ class RecipeBuilder {
             const requiredCheckbox = fieldDiv.querySelector('input[type="checkbox"]') as HTMLInputElement;
 
             selectorInput.addEventListener('input', () => this.updateMapping(field.name, 'selector', selectorInput.value));
+            selectorInput.addEventListener('click', () => {
+                this.lastClickedInput = selectorInput;
+                console.log('Clicked on input for field:', field.name);
+            });
+            selectorInput.addEventListener('focus', () => {
+                this.lastClickedInput = selectorInput;
+                console.log('Focused on input for field:', field.name);
+            });
             methodSelect.addEventListener('change', () => {
                 this.updateMapping(field.name, 'extractionMethod', methodSelect.value);
                 this.toggleOptions(fieldDiv, methodSelect.value);
@@ -339,21 +344,27 @@ class RecipeBuilder {
         }
 
         let data;
+        let dataPrefix;
         switch (tab) {
             case 'jsonld':
                 data = this.deepSearchData.jsonLd;
+                dataPrefix = 'jsonLd'; // Use correct case for content script compatibility
                 break;
             case 'dataLayer':
                 data = this.deepSearchData.dataLayer;
+                dataPrefix = 'dataLayers.dataLayer'; // Match content script structure
                 break;
             case 'meta':
                 data = this.deepSearchData.meta;
+                dataPrefix = 'metaTags'; // Match content script structure
                 break;
             case 'digitalData':
                 data = this.deepSearchData.digitalData;
+                dataPrefix = 'dataLayers.digitalData'; // Match content script structure
                 break;
             default:
                 data = {};
+                dataPrefix = '';
         }
 
         if (Array.isArray(data) && data.length === 0) {
@@ -361,7 +372,7 @@ class RecipeBuilder {
         } else if (Object.keys(data).length === 0) {
             content.textContent = `No ${tab} data found`;
         } else {
-            this.renderStructuredData(content, data, tab);
+            this.renderStructuredData(content, data, dataPrefix);
         }
     }
 
@@ -404,30 +415,73 @@ class RecipeBuilder {
         traverse(data);
     }
 
+    private lastClickedInput: HTMLInputElement | null = null;
+
     selectStructuredDataPath(path: string): void {
-        // Find the currently focused input or the first empty required field
-        let targetInput = document.activeElement as HTMLInputElement;
-        if (!targetInput || !targetInput.classList.contains('selector-input')) {
-            // Find first empty required field
+        console.log('Clicked structured data path:', path);
+        
+        // Try different strategies to find the target input:
+        // 1. Use the last clicked input if available
+        // 2. Use the currently focused input
+        // 3. Find the first empty required field
+        // 4. Find the first required field (even if it has a value)
+        
+        let targetInput: HTMLInputElement | null = null;
+        
+        // Strategy 1: Last clicked input
+        if (this.lastClickedInput && document.body.contains(this.lastClickedInput)) {
+            targetInput = this.lastClickedInput;
+            console.log('Using last clicked input:', targetInput.dataset.field);
+        }
+        
+        // Strategy 2: Currently focused input
+        if (!targetInput) {
+            const activeElement = document.activeElement as HTMLInputElement;
+            if (activeElement && activeElement.classList.contains('selector-input')) {
+                targetInput = activeElement;
+                console.log('Using focused input:', targetInput.dataset.field);
+            }
+        }
+        
+        // Strategy 3: First empty required field
+        if (!targetInput) {
             const requiredFields = this.FIELD_MAPPINGS.filter(f => f.required);
             for (const field of requiredFields) {
                 const input = document.querySelector(`[data-field="${field.name}"].selector-input`) as HTMLInputElement;
                 if (input && !input.value) {
                     targetInput = input;
+                    console.log('Using first empty required field:', field.name);
                     break;
+                }
+            }
+        }
+        
+        // Strategy 4: First required field (even if it has a value)
+        if (!targetInput) {
+            const requiredFields = this.FIELD_MAPPINGS.filter(f => f.required);
+            if (requiredFields.length > 0) {
+                const input = document.querySelector(`[data-field="${requiredFields[0].name}"].selector-input`) as HTMLInputElement;
+                if (input) {
+                    targetInput = input;
+                    console.log('Using first required field:', requiredFields[0].name);
                 }
             }
         }
 
         if (targetInput && targetInput.classList.contains('selector-input')) {
             const fieldName = targetInput.dataset.field!;
+            console.log('Populating field:', fieldName, 'with path:', path);
+            
             targetInput.value = path;
             
             // Set extraction method to STRUCTURED_DATA
             const methodSelect = document.querySelector(`[data-field="${fieldName}"].method-select`) as HTMLSelectElement;
-            methodSelect.value = 'STRUCTURED_DATA';
+            if (methodSelect) {
+                methodSelect.value = 'STRUCTURED_DATA';
+                console.log('Set extraction method to STRUCTURED_DATA');
+            }
             
-            // Update mapping
+            // Update mapping (critical for test functionality)
             this.updateMapping(fieldName, 'selector', path);
             this.updateMapping(fieldName, 'extractionMethod', 'STRUCTURED_DATA');
             
@@ -435,7 +489,15 @@ class RecipeBuilder {
             const fieldDiv = targetInput.closest('.field-mapping')!;
             this.toggleOptions(fieldDiv, 'STRUCTURED_DATA');
             
+            // Trigger input events to ensure UI is synced
+            targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+            methodSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            
             this.validateForm();
+            
+            console.log('Updated mapping for', fieldName, '- current mapping:', this.recipeMapping[fieldName]);
+        } else {
+            console.log('No suitable target input found');
         }
     }
 
@@ -443,7 +505,7 @@ class RecipeBuilder {
         if (!this.recipeMapping[fieldName]) {
             this.recipeMapping[fieldName] = {
                 selector: '',
-                extractionMethod: 'TEXT'
+                extractionMethod: 'STRUCTURED_DATA'
             };
         }
         (this.recipeMapping[fieldName] as any)[property] = value;
@@ -451,11 +513,13 @@ class RecipeBuilder {
     }
 
     toggleOptions(fieldDiv: Element, method: string): void {
+        // No special options needed for the current extraction methods
+        // Hide any attribute/regex inputs if they exist from previous versions
         const attributeInput = fieldDiv.querySelector('[data-option="attribute"]') as HTMLInputElement;
         const regexInput = fieldDiv.querySelector('[data-option="regex"]') as HTMLInputElement;
         
-        attributeInput.style.display = method === 'ATTRIBUTE' ? 'block' : 'none';
-        regexInput.style.display = method === 'REGEX' ? 'block' : 'none';
+        if (attributeInput) attributeInput.style.display = 'none';
+        if (regexInput) regexInput.style.display = 'none';
     }
 
     validateForm(): void {
@@ -474,26 +538,206 @@ class RecipeBuilder {
 
     async handleTestCurrent(): Promise<void> {
         try {
-            // Get current tab for testing
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: false });
-            if (!tab?.id) {
-                throw new Error('No active tab found');
+            // Find the tab with the URL we're building a recipe for
+            const tabs = await chrome.tabs.query({ url: this.currentUrl });
+            let targetTab = tabs.length > 0 ? tabs[0] : null;
+            
+            if (!targetTab) {
+                // If no exact match, try to find a tab with similar URL pattern
+                const allTabs = await chrome.tabs.query({});
+                targetTab = allTabs.find(tab => tab.url && tab.url.includes(new URL(this.currentUrl).hostname)) || null;
+            }
+            
+            if (!targetTab?.id) {
+                throw new Error('Cannot find the target page tab. Please keep the original page open.');
             }
 
             // Build test recipe from current mappings
             const testRecipe = this.buildRecipeFromMappings();
             
-            // Send test message
-            const result = await chrome.tabs.sendMessage(tab.id, {
-                action: 'TEST_RECIPE',
-                recipe: testRecipe
+            if (!testRecipe.parsedRecipeData.selectors || testRecipe.parsedRecipeData.selectors.length === 0) {
+                throw new Error('No field mappings configured. Please map at least one field before testing.');
+            }
+            
+            console.log('About to execute script on tab:', targetTab.id);
+            console.log('Test recipe:', testRecipe);
+            
+            // Run extraction test using scripting API
+            const response = await chrome.scripting.executeScript({
+                target: { tabId: targetTab.id },
+                func: (recipe) => {
+                    // This function runs in the page context
+                    const results: any = {};
+                    
+                    if (!recipe.parsedRecipeData?.selectors) {
+                        return { error: 'No selectors in recipe' };
+                    }
+                    
+                    recipe.parsedRecipeData.selectors.forEach((selector: any) => {
+                        let value = '';
+                        try {
+                            if (selector.extractionMethod === 'STRUCTURED_DATA') {
+                                // Extract structured data
+                                const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+                                const jsonLdData: any[] = [];
+                                jsonLdScripts.forEach(script => {
+                                    try {
+                                        const content = script.textContent?.trim();
+                                        if (content) {
+                                            jsonLdData.push(JSON.parse(content));
+                                        }
+                                    } catch (error) {
+                                        console.warn('Failed to parse JSON-LD:', error);
+                                    }
+                                });
+
+                                const context = {
+                                    jsonLd: jsonLdData,
+                                    dataLayer: (window as any).dataLayer || [],
+                                    meta: (() => {
+                                        const metaTags: { [key: string]: string } = {};
+                                        const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+                                        metaElements.forEach((meta: Element) => {
+                                            const property = meta.getAttribute('property') || 
+                                                            meta.getAttribute('name') || 
+                                                            meta.getAttribute('itemprop');
+                                            const content = meta.getAttribute('content');
+                                            if (property && content) {
+                                                metaTags[property] = content;
+                                            }
+                                        });
+                                        return metaTags;
+                                    })(),
+                                    digitalData: (window as any).digitalData || {}
+                                };
+
+                                // Evaluate structured data path
+                                try {
+                                    const parts = selector.selector.split('.');
+                                    let current = context;
+                                    
+                                    for (const part of parts) {
+                                        if (part.includes('[') && part.includes(']')) {
+                                            const indices = Array.from(part.matchAll(/\[(\d+)\]/g), (match) => parseInt((match as RegExpMatchArray)[1], 10));
+                                            const propertyName = part.split('[')[0];
+                                            
+                                            if (indices.length > 0 && propertyName) {
+                                                current = (current as any)[propertyName];
+                                                
+                                                for (const index of indices) {
+                                                    if (Array.isArray(current)) {
+                                                        current = current[index];
+                                                    } else {
+                                                        throw new Error('Expected array');
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            current = (current as any)[part];
+                                        }
+                                        
+                                        if (current === undefined || current === null) {
+                                            break;
+                                        }
+                                    }
+                                    
+                                    value = current ? String(current) : '';
+                                } catch (error) {
+                                    value = `Path evaluation error: ${error}`;
+                                }
+                            } else {
+                                // Standard DOM extraction
+                                let element: Element | null = null;
+                                
+                                if (selector.extractionMethod === 'XPATH') {
+                                    const xpathResult = document.evaluate(
+                                        selector.selector,
+                                        document,
+                                        null,
+                                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                                        null
+                                    );
+                                    element = xpathResult.singleNodeValue as Element;
+                                } else {
+                                    element = document.querySelector(selector.selector);
+                                }
+                                
+                                if (element) {
+                                    if (selector.extractionMethod === 'ATTRIBUTE' && selector.attributeName) {
+                                        value = element.getAttribute(selector.attributeName) || '';
+                                    } else {
+                                        value = element.textContent?.trim() || '';
+                                    }
+                                    
+                                    // Apply regex if specified
+                                    if (selector.regexPattern && value) {
+                                        const regex = new RegExp(selector.regexPattern, 'i');
+                                        const match = value.match(regex);
+                                        value = match ? ((match as RegExpMatchArray)[1] || (match as RegExpMatchArray)[0]) : value;
+                                    }
+                                }
+                            }
+                        } catch (error) {
+                            value = `Error: ${error}`;
+                        }
+                        
+                        // Apply the same field processing as in content script
+                        let processedValue = value || 'Not found';
+                        if (value && value !== 'Not found') {
+                            switch (selector.fieldName) {
+                                case 'PRICE':
+                                case 'SALE_PRICE':
+                                case 'UNIT_PRICE':
+                                    processedValue = String(this.parsePrice(value));
+                                    break;
+                                case 'CATEGORY':
+                                    processedValue = this.sanitizeCategory(value);
+                                    break;
+                                case 'IMAGE_URL':
+                                    processedValue = this.normalizeImageUrl(value);
+                                    break;
+                                case 'IN_STOCK':
+                                    processedValue = String(this.parseBoolean(value));
+                                    break;
+                                case 'RATING':
+                                    const rating = parseFloat(value);
+                                    processedValue = isNaN(rating) ? 'Not found' : String(rating);
+                                    break;
+                                case 'REVIEW_COUNT':
+                                    const reviewCount = parseInt(value);
+                                    processedValue = isNaN(reviewCount) ? 'Not found' : String(reviewCount);
+                                    break;
+                                default:
+                                    processedValue = value;
+                            }
+                        }
+                        results[selector.fieldName] = processedValue;
+                    });
+                    
+                    return results;
+                },
+                args: [testRecipe]
             });
 
-            if (result && result.success) {
-                this.displayTestResults(result.data);
-            } else {
-                throw new Error(result?.error || 'Test failed');
+            console.log('Script execution response:', response);
+            
+            if (!response || response.length === 0) {
+                throw new Error('No response from script execution');
             }
+            
+            const result = response[0]?.result;
+            console.log('Extracted result:', result);
+            
+            if (!result) {
+                console.error('Full response object:', response[0]);
+                throw new Error('No result returned from script execution');
+            }
+            
+            if (result.error) {
+                throw new Error(result.error);
+            }
+            
+            this.displayTestResults(result);
         } catch (error) {
             console.error('Test failed:', error);
             this.showStatusMessage(`Test failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
@@ -501,6 +745,8 @@ class RecipeBuilder {
     }
 
     buildRecipeFromMappings(): any {
+        console.log('Building recipe from current mappings:', this.recipeMapping);
+        
         const selectors = Object.entries(this.recipeMapping)
             .filter(([_, mapping]) => mapping.selector.trim())
             .map(([fieldName, mapping]) => ({
@@ -512,6 +758,8 @@ class RecipeBuilder {
                 isRequired: mapping.isRequired || false,
                 order: 0
             }));
+
+        console.log('Built selectors for testing:', selectors);
 
         return {
             id: 'test-recipe',
@@ -643,6 +891,35 @@ class RecipeBuilder {
         content.textContent = '';
     }
 
+    handleClearMappings(): void {
+        if (confirm('Are you sure you want to clear all field mappings? This action cannot be undone.')) {
+            // Clear all input fields in the mapping interface
+            document.querySelectorAll('.selector-input').forEach(input => {
+                (input as HTMLInputElement).value = '';
+            });
+            
+            document.querySelectorAll('.method-select').forEach(select => {
+                (select as HTMLSelectElement).selectedIndex = 0;
+            });
+            
+            document.querySelectorAll('.attribute-input').forEach(input => {
+                (input as HTMLInputElement).value = '';
+            });
+            
+            document.querySelectorAll('.regex-input').forEach(input => {
+                (input as HTMLInputElement).value = '';
+            });
+            
+            // Reset the recipe mapping object
+            this.recipeMapping = {};
+            
+            // Revalidate the form (will likely disable save button)
+            this.validateForm();
+            
+            this.showStatusMessage('All field mappings cleared', 'info');
+        }
+    }
+
     handleCancel(): void {
         if (confirm('Are you sure you want to cancel? Any unsaved changes will be lost.')) {
             window.close();
@@ -650,8 +927,75 @@ class RecipeBuilder {
     }
 
     async handleRefreshPage(): Promise<void> {
-        await this.extractDeepSearchData();
-        this.showStatusMessage('Page data refreshed', 'success');
+        try {
+            this.showStatusMessage('Refreshing page data...', 'info');
+            
+            // Find the tab with our URL
+            const tabs = await chrome.tabs.query({ url: this.currentUrl });
+            let targetTab = tabs.length > 0 ? tabs[0] : null;
+            
+            if (!targetTab) {
+                // Try to find by hostname
+                const allTabs = await chrome.tabs.query({});
+                targetTab = allTabs.find(tab => tab.url && tab.url.includes(new URL(this.currentUrl).hostname)) || null;
+            }
+            
+            if (!targetTab?.id) {
+                throw new Error('Cannot find the target page tab. Please keep the original page open.');
+            }
+
+            // Extract fresh data using scripting API
+            const response = await chrome.scripting.executeScript({
+                target: { tabId: targetTab.id },
+                func: () => {
+                    // Extract JSON-LD
+                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+                    const jsonLdData: any[] = [];
+                    jsonLdScripts.forEach(script => {
+                        try {
+                            const content = script.textContent?.trim();
+                            if (content) {
+                                jsonLdData.push(JSON.parse(content));
+                            }
+                        } catch (error) {
+                            console.warn('Failed to parse JSON-LD:', error);
+                        }
+                    });
+
+                    // Extract dataLayer and digitalData
+                    const dataLayer = (window as any).dataLayer || [];
+                    const digitalData = (window as any).digitalData || {};
+
+                    // Extract meta tags
+                    const metaTags: { [key: string]: string } = {};
+                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+                    metaElements.forEach(meta => {
+                        const property = meta.getAttribute('property') || 
+                                        meta.getAttribute('name') || 
+                                        meta.getAttribute('itemprop');
+                        const content = meta.getAttribute('content');
+                        if (property && content) {
+                            metaTags[property] = content;
+                        }
+                    });
+
+                    return {
+                        jsonLd: jsonLdData,
+                        dataLayer: dataLayer,
+                        meta: metaTags,
+                        digitalData: digitalData
+                    };
+                }
+            });
+
+            this.deepSearchData = response[0].result;
+            this.displayDeepSearchData();
+            this.showStatusMessage('Page data refreshed successfully!', 'success');
+            
+        } catch (error) {
+            console.error('Failed to refresh page data:', error);
+            this.showStatusMessage('Failed to refresh page data. Make sure the original page is still open.', 'error');
+        }
     }
 
     showVersionWarning(): void {
@@ -680,6 +1024,69 @@ class RecipeBuilder {
         setTimeout(() => {
             statusDiv.classList.add('hidden');
         }, 5000);
+    }
+
+    // Field processing methods (duplicated from content script for test consistency)
+    parsePrice(value: string): number | string {
+        if (!value) return 'Not found';
+        
+        // Remove currency symbols, whitespace, and non-numeric characters except . and ,
+        const cleaned = value.replace(/[^\d.,]/g, '');
+        
+        // Handle cases where comma is thousands separator (e.g., "1,299.99")
+        // or where comma is decimal separator (e.g., "1299,99")
+        let normalizedValue = cleaned;
+        
+        if (cleaned.includes(',') && cleaned.includes('.')) {
+            // Assume comma is thousands separator: "1,299.99" -> "1299.99"
+            normalizedValue = cleaned.replace(/,/g, '');
+        } else if (cleaned.includes(',') && !cleaned.includes('.')) {
+            // Assume comma is decimal separator: "1299,99" -> "1299.99"
+            normalizedValue = cleaned.replace(',', '.');
+        }
+        
+        const parsed = parseFloat(normalizedValue);
+        
+        // Ensure the result is a valid number and round to 2 decimal places
+        if (isNaN(parsed) || parsed <= 0) return 'Not found';
+        
+        return Math.round(parsed * 100) / 100; // Round to 2 decimal places
+    }
+
+    sanitizeCategory(value: string): string {
+        if (!value) return value;
+        
+        // Split by line breaks, trim each line, filter out empty lines, then rejoin
+        return value
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line.length > 0)
+            .join('\n');
+    }
+
+    normalizeImageUrl(value: string): string {
+        if (!value) return 'Not found';
+        
+        try {
+            const url = new URL(value, window.location.origin);
+            return url.toString();
+        } catch {
+            return value;
+        }
+    }
+
+    parseBoolean(value: string): boolean | string {
+        if (!value) return 'Not found';
+        
+        const normalized = value.toLowerCase().trim();
+        if (['true', 'yes', '1', 'available', 'in stock'].includes(normalized)) {
+            return true;
+        }
+        if (['false', 'no', '0', 'unavailable', 'out of stock'].includes(normalized)) {
+            return false;
+        }
+        
+        return 'Not found';
     }
 }
 
