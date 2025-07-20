@@ -111,6 +111,18 @@ class RecipeBuilder {
                 this.populateFormWithRecipe(this.editingRecipe);
                 this.showVersionWarning();
             }
+            
+            // Always auto-populate merchant name and URL pattern if they're empty
+            const merchantNameInput = document.getElementById('merchant-name') as HTMLInputElement;
+            const urlPatternInput = document.getElementById('url-pattern') as HTMLInputElement;
+            
+            if (!merchantNameInput.value.trim()) {
+                this.autoPopulateMerchantName();
+            }
+            
+            if (!urlPatternInput.value.trim()) {
+                urlPatternInput.value = this.generateUrlPattern();
+            }
 
             // Initialize the interface with loaded data
             this.displayMappingInterface();
@@ -618,7 +630,7 @@ class RecipeBuilder {
                                     
                                     for (const part of parts) {
                                         if (part.includes('[') && part.includes(']')) {
-                                            const indices = Array.from(part.matchAll(/\[(\d+)\]/g), (match) => parseInt((match as RegExpMatchArray)[1], 10));
+                                            const indices = Array.from(part.matchAll(/\\[(\\d+)\\]/g), (match) => parseInt((match as RegExpMatchArray)[1], 10));
                                             const propertyName = part.split('[')[0];
                                             
                                             if (indices.length > 0 && propertyName) {
@@ -871,18 +883,75 @@ class RecipeBuilder {
         throw new Error('Failed to create merchant');
     }
 
+    autoPopulateMerchantName(): void {
+        try {
+            const url = new URL(this.currentUrl);
+            let hostname = url.hostname;
+
+            // Remove www. and other common subdomains
+            hostname = hostname.replace(/^(www|shop|store)\./, '');
+
+            // Remove TLD
+            const parts = hostname.split('.');
+            if (parts.length > 1) {
+                parts.pop(); // Remove TLD
+                if (parts.length > 1 && /^(co|com|org|net)$/i.test(parts[parts.length - 1])) {
+                    parts.pop(); // Remove second-level domain like .co in .co.nz
+                }
+            }
+            
+            // Handle compound names (like mitre10 -> mitre 10)
+            let merchantName = parts.join(' ')
+                .replace(/(\d+)/g, ' $1') // Add space before numbers
+                .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space between camelCase
+                .replace(/\s+/g, ' ') // Normalize multiple spaces
+                .trim();
+
+            // Capitalize first letter of each word
+            merchantName = merchantName
+                .split(' ')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                .join(' ');
+
+            (document.getElementById('merchant-name') as HTMLInputElement).value = merchantName;
+        } catch (error) {
+            console.error('Failed to auto-populate merchant name:', error);
+        }
+    }
+
     generateUrlPattern(): string {
         try {
             const url = new URL(this.currentUrl);
+            const origin = url.origin.replace(/[.*+\-?^${}()|[\]\\]/g, '\\$&'); // Escape special regex characters
             const pathname = url.pathname;
+
+            // More robust pattern generation for product pages
+            let pattern = pathname
+                // Replace trailing numbers/IDs with a wildcard pattern
+                .replace(/\/[^/]*\d+[^/]*$/, '/[^/]+')
+                // Replace product IDs in middle of path
+                .replace(/\/[^/]*\d+[^/]*\//, '/[^/]+/')
+                // Replace specific product name segments but keep structure
+                .replace(/\/(p|product|products|detail|details)\/[^/]+/, '/$1/[^/]+')
+                // Handle complex product paths like /shop/product-name/p/12345
+                .replace(/\/shop\/[^/]+\/p\/[^/]+/, '/shop/[^/]+/p/[^/]+')
+                // Replace any remaining specific product identifiers
+                .replace(/\/[a-z]+-[a-z0-9-]+\//, '/[^/]+/');
+
+            // Ensure proper ending
+            if (!pattern.endsWith('$')) {
+                if (pattern.endsWith('/')) {
+                    pattern += '?$'; // Optional trailing slash
+                } else {
+                    pattern += '$';
+                }
+            }
             
-            // Simple pattern generation - replace IDs and specific product identifiers with wildcards
-            return pathname
-                .replace(/\/\d+/g, '/[^/]+')
-                .replace(/\/[a-zA-Z0-9-_]+\.html?$/i, '/[^/]+\\.html?$')
-                .replace(/\/$/, '/?$') + '$';
-        } catch {
-            return '.*';
+            // Return the full pattern including domain
+            return `${origin}${pattern}`;
+        } catch (error) {
+            console.error('Error generating URL pattern:', error);
+            return '.*'; // Fallback
         }
     }
 
