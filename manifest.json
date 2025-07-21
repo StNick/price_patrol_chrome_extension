@@ -7,7 +7,8 @@
     "storage",
     "activeTab",
     "scripting",
-    "alarms"
+    "alarms",
+    "tabs"
   ],
   "host_permissions": [
     "https://*/*",
@@ -39,5 +40,15 @@
     "32": "icons/icon32.svg",
     "48": "icons/icon48.svg",
     "128": "icons/icon128.svg"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "popup/recipe-builder.html",
+        "popup/recipe-builder.css",
+        "popup/recipe-builder.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }

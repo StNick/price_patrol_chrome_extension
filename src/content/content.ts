@@ -17,6 +17,12 @@ async function handleContentMessage(message: any): Promise<any> {
     case 'AUTO_EXTRACT_DATA':
       return await handleAutoExtraction();
       
+    case 'EXTRACT_DEEP_SEARCH_DATA':
+      return await extractDeepSearchData();
+      
+    case 'TEST_RECIPE':
+      return await testRecipe(message.recipe);
+      
     default:
       return { error: 'Unknown action' };
   }
@@ -572,6 +578,109 @@ function parseBoolean(value: string): boolean | undefined {
   }
   
   return undefined;
+}
+
+// Admin Functions for Recipe Builder
+
+async function extractDeepSearchData(): Promise<any> {
+  try {
+    const deepSearchData = {
+      jsonLd: extractJsonLd(),
+      dataLayer: extractDataLayer(),
+      meta: extractMetaTags(),
+      digitalData: extractDigitalData()
+    };
+
+    return {
+      success: true,
+      data: deepSearchData
+    };
+  } catch (error) {
+    console.error('Deep search extraction failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Deep search extraction failed'
+    };
+  }
+}
+
+function extractJsonLd(): any[] {
+  const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+  const jsonLdData: any[] = [];
+
+  jsonLdScripts.forEach((script, index) => {
+    try {
+      const content = script.textContent?.trim();
+      if (content) {
+        const parsed = JSON.parse(content);
+        jsonLdData.push(parsed);
+      }
+    } catch (error) {
+      console.warn(`Failed to parse JSON-LD script ${index}:`, error);
+    }
+  });
+
+  return jsonLdData;
+}
+
+function extractDataLayer(): any[] {
+  try {
+    // @ts-ignore
+    return window.dataLayer ? [...window.dataLayer] : [];
+  } catch (error) {
+    console.warn('Failed to extract dataLayer:', error);
+    return [];
+  }
+}
+
+function extractMetaTags(): { [key: string]: string } {
+  const metaTags: { [key: string]: string } = {};
+  const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+
+  metaElements.forEach(meta => {
+    const property = meta.getAttribute('property') || 
+                    meta.getAttribute('name') || 
+                    meta.getAttribute('itemprop');
+    const content = meta.getAttribute('content');
+    
+    if (property && content) {
+      metaTags[property] = content;
+    }
+  });
+
+  return metaTags;
+}
+
+function extractDigitalData(): any {
+  try {
+    // @ts-ignore
+    return window.digitalData || {};
+  } catch (error) {
+    console.warn('Failed to extract digitalData:', error);
+    return {};
+  }
+}
+
+async function testRecipe(recipe: any): Promise<any> {
+  try {
+    console.log('Testing recipe:', recipe);
+    
+    // Extract data using the recipe (without submitting to API)
+    const extractedData = await extractFromPage(recipe, window.location.href);
+    
+    console.log('Test extraction results:', extractedData);
+    
+    return {
+      success: true,
+      data: extractedData
+    };
+  } catch (error) {
+    console.error('Recipe test failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Recipe test failed'
+    };
+  }
 }
 
 // Auto-extraction on page load

@@ -157,6 +157,11 @@ class PricePatrolPopup {
         
         // Auto-submit checkbox
         document.getElementById('auto-submit-checkbox')!.addEventListener('change', (e) => this.handleAutoSubmitToggle(e));
+        
+        // Admin events
+        document.getElementById('create-recipe-btn')!.addEventListener('click', () => this.handleCreateRecipe());
+        document.getElementById('copy-test-results-btn')!.addEventListener('click', () => this.handleCopyTestResults());
+        document.getElementById('close-admin-test-btn')!.addEventListener('click', () => this.handleCloseAdminTest());
     }
 
     async handleLogin(): Promise<void> {
@@ -204,7 +209,10 @@ class PricePatrolPopup {
 
                 this.showStatus('Login successful!', 'success');
             } else {
-                this.showError(response.error || 'Login failed');
+                const errorMessage = typeof response.error === 'string' 
+                    ? response.error 
+                    : (response.error?.message || 'Login failed');
+                this.showError(errorMessage);
             }
         } catch (error) {
             console.error('Login error:', error);
@@ -400,14 +408,24 @@ class PricePatrolPopup {
         const authSection = document.getElementById('auth-section')!;
         const mainSection = document.getElementById('main-section')!;
         const userEmailSpan = document.getElementById('user-email')!;
+        const adminRecipeSection = document.getElementById('admin-recipe-section')!;
 
         if (this.isLoggedIn && this.currentUser) {
             authSection.classList.add('hidden');
             mainSection.classList.remove('hidden');
             userEmailSpan.textContent = this.currentUser.email;
+            
+            // Show admin recipe builder for ADMIN users
+            if (this.currentUser.role === 'ADMIN') {
+                adminRecipeSection.classList.remove('hidden');
+                this.checkAdminRecipes();
+            } else {
+                adminRecipeSection.classList.add('hidden');
+            }
         } else {
             authSection.classList.remove('hidden');
             mainSection.classList.add('hidden');
+            adminRecipeSection.classList.add('hidden');
         }
     }
 
@@ -416,7 +434,7 @@ class PricePatrolPopup {
         errorDiv.textContent = message;
     }
 
-    showStatus(message: string, type: 'success' | 'error'): void {
+    showStatus(message: string, type: 'success' | 'error' | 'info'): void {
         console.log(`${type.toUpperCase()}: ${message}`);
     }
 
@@ -518,9 +536,250 @@ class PricePatrolPopup {
             envIndicator.className = `environment-indicator ${isDev ? 'dev' : 'prod'}`;
         }
     }
+
+    // Admin Recipe Builder Methods
+    async checkAdminRecipes(): Promise<void> {
+        if (!this.currentTab?.url) return;
+        
+        try {
+            // Use the same background script logic as regular page support detection
+            const response = await chrome.runtime.sendMessage({
+                action: 'GET_RECIPES_FOR_URL',
+                url: this.currentTab.url
+            });
+            
+            console.log('Admin recipe check response:', response);
+            
+            const recipes = response.recipes || [];
+            
+            if (recipes.length > 0) {
+                this.displayAdminRecipes(recipes);
+            } else {
+                // Hide existing recipes section if no recipes found
+                document.getElementById('admin-existing-recipes')!.classList.add('hidden');
+                
+                // Reset the create button
+                const createBtn = document.getElementById('create-recipe-btn')!;
+                createBtn.innerHTML = '<span class="btn-icon">🛠️</span>Create Recipe';
+                createBtn.onclick = () => this.handleCreateRecipe();
+            }
+        } catch (error) {
+            console.error('Failed to check admin recipes:', error);
+        }
+    }
+
+    displayAdminRecipes(recipes: any[]): void {
+        const existingRecipesSection = document.getElementById('admin-existing-recipes')!;
+        const recipesList = document.getElementById('admin-recipes-list')!;
+        const createBtn = document.getElementById('create-recipe-btn')!;
+        
+        recipesList.innerHTML = '';
+        
+        // Update the main button text based on whether recipes exist
+        if (recipes.length > 0) {
+            createBtn.innerHTML = '<span class="btn-icon">✏️</span>Edit Recipe';
+            createBtn.onclick = () => this.editRecipe(recipes[0].id); // Edit first recipe
+        } else {
+            createBtn.innerHTML = '<span class="btn-icon">🛠️</span>Create Recipe';
+            createBtn.onclick = () => this.handleCreateRecipe();
+        }
+        
+        recipes.forEach(recipe => {
+            const recipeItem = document.createElement('div');
+            recipeItem.className = 'recipe-item';
+            
+            recipeItem.innerHTML = `
+                <div>
+                    <div class="recipe-name">${recipe.name}</div>
+                    <div class="recipe-version">v${recipe.version}</div>
+                </div>
+            `;
+            
+            recipesList.appendChild(recipeItem);
+        });
+        
+        existingRecipesSection.classList.remove('hidden');
+    }
+
+
+    async editRecipe(recipeId: string): Promise<void> {
+        if (!this.currentTab?.id || !this.currentTab?.url) {
+            this.showStatus('No active tab found', 'error');
+            return;
+        }
+
+        try {
+            this.showStatus('Loading recipe and extracting page data...', 'info');
+            
+            // Get the recipe details first
+            const recipeResponse = await this.apiRequest(`/scraping-recipes/${recipeId}`);
+            if (!recipeResponse || recipeResponse.error) {
+                throw new Error(recipeResponse?.error || 'Failed to load recipe');
+            }
+            
+            // Perform deep search on current tab using scripting API
+            const response = await chrome.scripting.executeScript({
+                target: { tabId: this.currentTab.id },
+                func: () => {
+                    // Extract JSON-LD
+                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+                    const jsonLdData: any[] = [];
+                    jsonLdScripts.forEach(script => {
+                        try {
+                            const content = script.textContent?.trim();
+                            if (content) {
+                                jsonLdData.push(JSON.parse(content));
+                            }
+                        } catch (error) {
+                            console.warn('Failed to parse JSON-LD:', error);
+                        }
+                    });
+
+                    // Extract dataLayer and digitalData
+                    const dataLayer = (window as any).dataLayer || [];
+                    const digitalData = (window as any).digitalData || {};
+
+                    // Extract meta tags
+                    const metaTags: { [key: string]: string } = {};
+                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+                    metaElements.forEach(meta => {
+                        const property = meta.getAttribute('property') || 
+                                        meta.getAttribute('name') || 
+                                        meta.getAttribute('itemprop');
+                        const content = meta.getAttribute('content');
+                        if (property && content) {
+                            metaTags[property] = content;
+                        }
+                    });
+
+                    return {
+                        jsonLd: jsonLdData,
+                        dataLayer: dataLayer,
+                        meta: metaTags,
+                        digitalData: digitalData
+                    };
+                }
+            });
+
+            const deepSearchData = response[0].result;
+            
+            // Store data in chrome.storage for the recipe builder
+            await chrome.storage.local.set({
+                deepSearchData: deepSearchData,
+                recipeBuilderUrl: this.currentTab.url,
+                authToken: (await chrome.storage.local.get(['authToken'])).authToken,
+                editingRecipe: recipeResponse
+            });
+            
+            // Open recipe builder in new tab
+            const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html');
+            chrome.tabs.create({ url: builderUrl });
+            
+            this.showStatus('Recipe builder opened for editing!', 'success');
+            
+        } catch (error) {
+            console.error('Failed to open recipe for editing:', error);
+            this.showStatus('Failed to load recipe for editing', 'error');
+        }
+    }
+
+    async handleCreateRecipe(): Promise<void> {
+        if (!this.currentTab?.id || !this.currentTab?.url) {
+            this.showStatus('No active tab found', 'error');
+            return;
+        }
+
+        try {
+            this.showStatus('Extracting page data...', 'info');
+            
+            // Perform deep search on current tab using scripting API
+            const response = await chrome.scripting.executeScript({
+                target: { tabId: this.currentTab.id },
+                func: () => {
+                    // Extract JSON-LD
+                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+                    const jsonLdData: any[] = [];
+                    jsonLdScripts.forEach(script => {
+                        try {
+                            const content = script.textContent?.trim();
+                            if (content) {
+                                jsonLdData.push(JSON.parse(content));
+                            }
+                        } catch (error) {
+                            console.warn('Failed to parse JSON-LD:', error);
+                        }
+                    });
+
+                    // Extract dataLayer and digitalData
+                    const dataLayer = (window as any).dataLayer || [];
+                    const digitalData = (window as any).digitalData || {};
+
+                    // Extract meta tags
+                    const metaTags: { [key: string]: string } = {};
+                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
+                    metaElements.forEach(meta => {
+                        const property = meta.getAttribute('property') || 
+                                        meta.getAttribute('name') || 
+                                        meta.getAttribute('itemprop');
+                        const content = meta.getAttribute('content');
+                        if (property && content) {
+                            metaTags[property] = content;
+                        }
+                    });
+
+                    return {
+                        jsonLd: jsonLdData,
+                        dataLayer: dataLayer,
+                        meta: metaTags,
+                        digitalData: digitalData
+                    };
+                }
+            });
+
+            const deepSearchData = response[0].result;
+            
+            // Store data in chrome.storage for the recipe builder
+            await chrome.storage.local.set({
+                deepSearchData: deepSearchData,
+                recipeBuilderUrl: this.currentTab.url,
+                authToken: (await chrome.storage.local.get(['authToken'])).authToken,
+                editingRecipe: null  // Clear any previous recipe state for new recipe creation
+            });
+            
+            // Open recipe builder in new tab
+            const builderUrl = chrome.runtime.getURL('popup/recipe-builder.html');
+            chrome.tabs.create({ url: builderUrl });
+            
+            this.showStatus('Recipe builder opened!', 'success');
+            
+        } catch (error) {
+            console.error('Failed to launch recipe builder:', error);
+            this.showStatus('Failed to extract page data', 'error');
+        }
+    }
+
+    handleCopyTestResults(): void {
+        const testContent = document.getElementById('admin-test-content') as HTMLPreElement;
+        if (testContent && testContent.textContent) {
+            navigator.clipboard.writeText(testContent.textContent).then(() => {
+                this.showStatus('Test results copied to clipboard', 'success');
+            }).catch(error => {
+                console.error('Failed to copy test results:', error);
+                this.showStatus('Failed to copy test results', 'error');
+            });
+        }
+    }
+
+    handleCloseAdminTest(): void {
+        const testResultsSection = document.getElementById('admin-test-results')!;
+        testResultsSection.classList.add('hidden');
+    }
 }
+
+// Global reference for onclick handlers
+let pricePatrolPopup: PricePatrolPopup;
 
 // Initialize popup when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new PricePatrolPopup();
+    pricePatrolPopup = new PricePatrolPopup();
 });
