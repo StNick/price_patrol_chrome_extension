@@ -1,6 +1,6 @@
 {
   "name": "price-patrol-extension",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Open-source Chrome extension for Price Patrol data collection",
   "scripts": {
     "build": "node build-esbuild.js",
