@@ -240,6 +240,12 @@ class PricePatrolPopup {
             return;
         }
 
+        // Ensure user is logged in before attempting extraction
+        if (!this.isLoggedIn || !this.currentUser) {
+            this.showStatus('Please log in to extract product data', 'error');
+            return;
+        }
+
         const extractBtn = document.getElementById('extract-btn') as HTMLButtonElement;
         const statusDiv = document.getElementById('extraction-status')!;
 
@@ -508,6 +514,12 @@ class PricePatrolPopup {
     async triggerAutoExtraction(): Promise<void> {
         if (!this.currentTab?.id) return;
         
+        // Ensure user is logged in before attempting auto-extraction
+        if (!this.isLoggedIn || !this.currentUser) {
+            console.log('User not logged in, skipping auto-extraction trigger');
+            return;
+        }
+        
         try {
             // Send auto-extraction message to content script
             await chrome.tabs.sendMessage(this.currentTab.id, {
@@ -617,51 +629,16 @@ class PricePatrolPopup {
                 throw new Error(recipeResponse?.error || 'Failed to load recipe');
             }
             
-            // Perform deep search on current tab using scripting API
-            const response = await chrome.scripting.executeScript({
-                target: { tabId: this.currentTab.id },
-                func: () => {
-                    // Extract JSON-LD
-                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-                    const jsonLdData: any[] = [];
-                    jsonLdScripts.forEach(script => {
-                        try {
-                            const content = script.textContent?.trim();
-                            if (content) {
-                                jsonLdData.push(JSON.parse(content));
-                            }
-                        } catch (error) {
-                            console.warn('Failed to parse JSON-LD:', error);
-                        }
-                    });
-
-                    // Extract dataLayer and digitalData
-                    const dataLayer = (window as any).dataLayer || [];
-                    const digitalData = (window as any).digitalData || {};
-
-                    // Extract meta tags
-                    const metaTags: { [key: string]: string } = {};
-                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
-                    metaElements.forEach(meta => {
-                        const property = meta.getAttribute('property') || 
-                                        meta.getAttribute('name') || 
-                                        meta.getAttribute('itemprop');
-                        const content = meta.getAttribute('content');
-                        if (property && content) {
-                            metaTags[property] = content;
-                        }
-                    });
-
-                    return {
-                        jsonLd: jsonLdData,
-                        dataLayer: dataLayer,
-                        meta: metaTags,
-                        digitalData: digitalData
-                    };
-                }
+            // Use content script to perform deep search (uses structured-data.utils.ts)
+            const deepSearchResponse = await chrome.tabs.sendMessage(this.currentTab.id, {
+                action: 'EXTRACT_DEEP_SEARCH_DATA'
             });
-
-            const deepSearchData = response[0].result;
+            
+            if (!deepSearchResponse || !deepSearchResponse.success) {
+                throw new Error('Failed to extract page data');
+            }
+            
+            const deepSearchData = deepSearchResponse.data;
             
             // Store data in chrome.storage for the recipe builder
             await chrome.storage.local.set({
@@ -692,51 +669,16 @@ class PricePatrolPopup {
         try {
             this.showStatus('Extracting page data...', 'info');
             
-            // Perform deep search on current tab using scripting API
-            const response = await chrome.scripting.executeScript({
-                target: { tabId: this.currentTab.id },
-                func: () => {
-                    // Extract JSON-LD
-                    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-                    const jsonLdData: any[] = [];
-                    jsonLdScripts.forEach(script => {
-                        try {
-                            const content = script.textContent?.trim();
-                            if (content) {
-                                jsonLdData.push(JSON.parse(content));
-                            }
-                        } catch (error) {
-                            console.warn('Failed to parse JSON-LD:', error);
-                        }
-                    });
-
-                    // Extract dataLayer and digitalData
-                    const dataLayer = (window as any).dataLayer || [];
-                    const digitalData = (window as any).digitalData || {};
-
-                    // Extract meta tags
-                    const metaTags: { [key: string]: string } = {};
-                    const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
-                    metaElements.forEach(meta => {
-                        const property = meta.getAttribute('property') || 
-                                        meta.getAttribute('name') || 
-                                        meta.getAttribute('itemprop');
-                        const content = meta.getAttribute('content');
-                        if (property && content) {
-                            metaTags[property] = content;
-                        }
-                    });
-
-                    return {
-                        jsonLd: jsonLdData,
-                        dataLayer: dataLayer,
-                        meta: metaTags,
-                        digitalData: digitalData
-                    };
-                }
+            // Use content script to perform deep search (uses structured-data.utils.ts)
+            const deepSearchResponse = await chrome.tabs.sendMessage(this.currentTab.id, {
+                action: 'EXTRACT_DEEP_SEARCH_DATA'
             });
-
-            const deepSearchData = response[0].result;
+            
+            if (!deepSearchResponse || !deepSearchResponse.success) {
+                throw new Error('Failed to extract page data');
+            }
+            
+            const deepSearchData = deepSearchResponse.data;
             
             // Store data in chrome.storage for the recipe builder
             await chrome.storage.local.set({

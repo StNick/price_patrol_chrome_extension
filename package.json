@@ -3,22 +3,30 @@
   "version": "1.0.0",
   "description": "Open-source Chrome extension for Price Patrol data collection",
   "scripts": {
-    "build": "tsc && node build.js",
-    "build:dev": "NODE_ENV=development tsc && node build.js --dev",
-    "build:prod": "NODE_ENV=production tsc && node build.js",
-    "watch": "tsc --watch",
-    "dev": "npm run build:dev && npm run watch"
+    "build": "node build-esbuild.js",
+    "build:dev": "node build-esbuild.js --dev",
+    "build:prod": "node build-esbuild.js",
+    "watch": "node build-esbuild.js --dev --watch",
+    "dev": "npm run watch"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.246",
+    "esbuild": "^0.25.8",
     "typescript": "^5.0.0"
   },
-  "dependencies": {},
-  "keywords": ["chrome-extension", "price-tracking", "web-scraping", "crowdsourcing"],
+  "keywords": [
+    "chrome-extension",
+    "price-tracking",
+    "web-scraping",
+    "crowdsourcing"
+  ],
   "author": "Price Patrol",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/price-patrol/price-patrol-extension"
+  },
+  "dependencies": {
+    "@stnickza/pricepatrol-parser": "^1.0.0"
   }
 }

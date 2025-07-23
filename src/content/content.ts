@@ -1,5 +1,12 @@
 // Content script for Price Patrol extension
 
+import {
+  extractJsonLdData,
+  extractMetaTags,
+  extractDataLayers,
+  evaluateStructuredDataPath
+} from '@stnickza/pricepatrol-parser';
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleContentMessage(message).then(sendResponse);
@@ -29,13 +36,31 @@ async function handleContentMessage(message: any): Promise<any> {
 }
 
 async function extractData(recipe: any): Promise<any> {
+  const startTime = performance.now();
+  
   try {
-    console.log('Starting data extraction...');
+    console.log('🚀 Starting data extraction...');
     console.log('Recipe:', recipe);
     console.log('Current URL:', window.location.href);
     
-    const extractedData = await extractFromPage(recipe, window.location.href);
+    // Check if user is logged in before doing any extraction work
+    const authResult = await chrome.storage.local.get(['authToken']);
+    if (!authResult.authToken) {
+      console.log('User not logged in, skipping data extraction');
+      showNotification('Please log in to extract product data', 'error');
+      return {
+        success: false,
+        error: 'User not authenticated'
+      };
+    }
     
+    // Start extraction timing
+    const extractionStart = performance.now();
+    const extractedData = await extractFromPage(recipe, window.location.href);
+    const extractionEnd = performance.now();
+    const extractionTime = extractionEnd - extractionStart;
+    
+    console.log(`⏱️ Data extraction completed in ${extractionTime.toFixed(2)}ms`);
     console.log('Extracted data:', extractedData);
     
     // Check if we extracted any meaningful data
@@ -45,7 +70,7 @@ async function extractData(recipe: any): Promise<any> {
     }
     
     // Submit to API (wrap in items array)
-    console.log('Submitting data to API...');
+    console.log('📤 Submitting data to API...');
     console.log('Final submission data:', extractedData);
     
     // Validate critical fields before submission
@@ -58,30 +83,50 @@ async function extractData(recipe: any): Promise<any> {
     const submissionData = {
       items: [extractedData]
     };
-    const response = await submitPriceData(submissionData);
     
+    // Start submission timing
+    const submissionStart = performance.now();
+    const response = await submitPriceData(submissionData);
+    const submissionEnd = performance.now();
+    const submissionTime = submissionEnd - submissionStart;
+    
+    console.log(`⏱️ API submission completed in ${submissionTime.toFixed(2)}ms`);
     console.log('API response:', response);
     
+    // Calculate total time
+    const totalTime = performance.now() - startTime;
+    console.log(`⏱️ Total extraction + submission time: ${totalTime.toFixed(2)}ms`);
+    console.log(`📊 Performance breakdown: Extraction: ${extractionTime.toFixed(2)}ms | Submission: ${submissionTime.toFixed(2)}ms`);
+    
     if (response.success) {
-      console.log('Data submitted successfully:', response.data);
+      console.log('✅ Data submitted successfully:', response.data);
       showNotification('Data extracted and submitted successfully!', 'success');
     } else {
-      console.error('Failed to submit data:', response.error);
+      console.error('❌ Failed to submit data:', response.error);
       showNotification(`Failed to submit data: ${response.error}`, 'error');
     }
     
     return {
       success: response.success,
       extractedData,
-      submissionResult: response
+      submissionResult: response,
+      performance: {
+        extractionTime: extractionTime,
+        submissionTime: submissionTime,
+        totalTime: totalTime
+      }
     };
     
   } catch (error) {
-    console.error('Data extraction failed:', error);
+    const totalTime = performance.now() - startTime;
+    console.error(`❌ Data extraction failed after ${totalTime.toFixed(2)}ms:`, error);
     showNotification('Data extraction failed', 'error');
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: error instanceof Error ? error.message : 'Unknown error',
+      performance: {
+        totalTime: totalTime
+      }
     };
   }
 }
@@ -99,8 +144,10 @@ async function checkPageSupport(): Promise<any> {
 }
 
 async function handleAutoExtraction(): Promise<any> {
+  const autoStartTime = performance.now();
+  
   try {
-    console.log('Auto-extraction triggered for:', window.location.href);
+    console.log('🤖 Auto-extraction triggered for:', window.location.href);
     
     // Check if auto-submit is enabled
     const autoSubmitResult = await chrome.storage.local.get(['autoSubmitEnabled']);
@@ -129,26 +176,38 @@ async function handleAutoExtraction(): Promise<any> {
     
     // Use the first available recipe for auto-extraction
     const recipe = response.recipes[0];
-    console.log('Auto-extracting with recipe:', recipe.name);
+    console.log('🤖 Auto-extracting with recipe:', recipe.name);
     
     // Perform extraction
     const result = await extractData(recipe);
+    
+    const autoTotalTime = performance.now() - autoStartTime;
+    console.log(`🤖 Auto-extraction completed in ${autoTotalTime.toFixed(2)}ms`);
     
     if (result.success) {
       // Cache the successful extraction
       await cacheExtraction(window.location.href, result.extractedData, recipe.merchantId);
       showNotification('Price data auto-extracted and submitted successfully!', 'success');
     } else {
-      console.warn('Auto-extraction failed:', result.error);
+      console.warn('🤖 Auto-extraction failed:', result.error);
     }
     
-    return result;
+    return {
+      ...result,
+      autoPerformance: {
+        totalAutoTime: autoTotalTime
+      }
+    };
     
   } catch (error) {
-    console.error('Auto-extraction failed:', error);
+    const autoTotalTime = performance.now() - autoStartTime;
+    console.error(`🤖 Auto-extraction failed after ${autoTotalTime.toFixed(2)}ms:`, error);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Auto-extraction failed'
+      error: error instanceof Error ? error.message : 'Auto-extraction failed',
+      autoPerformance: {
+        totalAutoTime: autoTotalTime
+      }
     };
   }
 }
@@ -161,21 +220,19 @@ async function extractFromPage(recipe: any, url: string): Promise<any> {
     priceSource: 'WEBSITE'
   };
 
-  // Get structured data context
-  const context = buildDataContext();
+  // Get structured data context using the parser package
+  const context = {
+    jsonLd: extractJsonLdData(document),
+    metaTags: extractMetaTags(document), 
+    dataLayers: extractDataLayers(window)
+  };
 
-  console.log(`Processing ${recipe.selectors.length} selectors...`);
   for (const selector of recipe.selectors) {
     try {
-      console.log(`Processing selector for ${selector.fieldName}:`, selector);
       const value = await extractFieldValue(selector, context);
-      console.log(`Extracted value for ${selector.fieldName}:`, value);
       
       if (value !== null && value !== undefined && value !== '') {
         assignFieldValue(extractedData, selector.fieldName, value);
-        console.log(`✓ Successfully extracted ${selector.fieldName}: ${value}`);
-      } else {
-        console.log(`✗ No value found for ${selector.fieldName}`);
       }
     } catch (error) {
       console.warn(`Failed to extract ${selector.fieldName}:`, error);
@@ -185,62 +242,20 @@ async function extractFromPage(recipe: any, url: string): Promise<any> {
   return extractedData;
 }
 
-function buildDataContext(): any {
-  const context: any = {
-    metaTags: {},
-    jsonLd: [],
-    dataLayers: {}
-  };
-
-  // Extract meta tags
-  document.querySelectorAll('meta').forEach(tag => {
-    const key = tag.getAttribute('property') || tag.getAttribute('name');
-    if (key) {
-      context.metaTags[key] = tag.getAttribute('content') || '';
-    }
-  });
-
-  // Extract JSON-LD
-  document.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
-    try {
-      const data = JSON.parse(script.textContent || '');
-      context.jsonLd.push(data);
-    } catch (e) {
-      console.warn('Invalid JSON-LD:', e);
-    }
-  });
-
-  // Extract data layers
-  const win = window as any;
-  if (win.dataLayer) context.dataLayers.dataLayer = win.dataLayer;
-  if (win.digitalData) context.dataLayers.digitalData = win.digitalData;
-  if (win.utag_data) context.dataLayers.utag_data = win.utag_data;
-
-  return context;
-}
+// Structured data extraction functions are now imported from @pricepatrol/parser
 
 async function extractFieldValue(selector: any, context: any): Promise<string | null> {
-  console.log(`Extraction method: ${selector.extractionMethod}`);
-  console.log(`Selector value: ${selector.selector}`);
-  console.log(`Attribute: ${selector.attributeName}`);
-  console.log(`Regex: ${selector.regexPattern}`);
-
   // Handle different extraction methods
   switch (selector.extractionMethod) {
     case 'STRUCTURED_DATA':
       if (selector.selector) {
-        console.log(`Using structured data path: ${selector.selector}`);
-        const result = evaluateObjectPath(context, selector.selector);
-        console.log(`Structured data result:`, result);
-        return result;
+        return evaluateStructuredDataPath(context, selector.selector);
       }
       break;
 
     case 'TEXT':
       if (selector.selector) {
-        console.log(`Using text selector: ${selector.selector}`);
         const element = document.querySelector(selector.selector);
-        console.log(`Found element:`, element);
         if (element) {
           let value = '';
           
@@ -264,7 +279,6 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
 
     case 'XPATH':
       if (selector.selector) {
-        console.log(`Using XPath: ${selector.selector}`);
         const result = document.evaluate(
           selector.selector,
           document,
@@ -274,7 +288,6 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
         );
         
         const element = result.singleNodeValue as Element;
-        console.log(`Found XPath element:`, element);
         if (element) {
           let value = '';
           
@@ -298,9 +311,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
 
     case 'ATTRIBUTE':
       if (selector.selector) {
-        console.log(`Using attribute selector: ${selector.selector}`);
         const element = document.querySelector(selector.selector);
-        console.log(`Found attribute element:`, element);
         if (element && selector.attributeName) {
           let value = element.getAttribute(selector.attributeName) || '';
           
@@ -317,9 +328,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
       break;
 
     case 'REGEX':
-      // For regex extraction, apply regex to the entire page or specific element
       if (selector.regexPattern) {
-        console.log(`Using regex pattern: ${selector.regexPattern}`);
         let searchText = document.body.textContent || '';
         
         // If a selector is provided, search within that element
@@ -340,9 +349,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
 
     case 'INNER_HTML':
       if (selector.selector) {
-        console.log(`Using inner HTML selector: ${selector.selector}`);
         const element = document.querySelector(selector.selector);
-        console.log(`Found inner HTML element:`, element);
         if (element) {
           let value = element.innerHTML || '';
           
@@ -359,9 +366,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
       break;
 
     case 'JS_PATH':
-      // For JS_PATH, evaluate JavaScript path (like window.dataLayer[0].product)
       if (selector.selector) {
-        console.log(`Using JS path: ${selector.selector}`);
         try {
           const result = eval(selector.selector);
           let value = String(result || '');
@@ -375,7 +380,6 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
 
           return value;
         } catch (error) {
-          console.warn('JS path evaluation error:', error);
           return null;
         }
       }
@@ -384,16 +388,11 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
 
   // Fallback to legacy format for backwards compatibility
   if (selector.structuredDataPath) {
-    console.log(`Using legacy structured data path: ${selector.structuredDataPath}`);
-    const result = evaluateObjectPath(context, selector.structuredDataPath);
-    console.log(`Legacy structured data result:`, result);
-    return result;
+    return evaluateStructuredDataPath(context, selector.structuredDataPath);
   }
 
   if (selector.cssSelector) {
-    console.log(`Using legacy CSS selector: ${selector.cssSelector}`);
     const element = document.querySelector(selector.cssSelector);
-    console.log(`Found legacy element:`, element);
     if (element) {
       let value = '';
       
@@ -414,50 +413,10 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
     }
   }
 
-  console.log(`No extraction method matched for selector:`, selector);
   return null;
 }
 
-function evaluateObjectPath(obj: any, path: string): string | null {
-  try {
-    const parts = path.split('.');
-    let current = obj;
-    
-    for (const part of parts) {
-      if (part.includes('[') && part.includes(']')) {
-        // Extract property name and all array indices
-        const indices = Array.from(part.matchAll(/\[(\d+)\]/g), match => parseInt(match[1], 10));
-        const propertyName = part.split('[')[0];
-        
-        if (indices.length > 0 && propertyName) {
-          current = current[propertyName];
-          
-          // Apply each array index consecutively
-          for (const index of indices) {
-            if (Array.isArray(current)) {
-              current = current[index];
-            } else {
-              return null;
-            }
-          }
-        } else {
-          return null;
-        }
-      } else {
-        current = current[part];
-      }
-      
-      if (current === undefined || current === null) {
-        return null;
-      }
-    }
-    
-    return String(current);
-  } catch (error) {
-    console.warn('Path evaluation error:', error);
-    return null;
-  }
-}
+// Path evaluation function is now imported from @pricepatrol/parser
 
 function sanitizeCategory(value: string): string {
   if (!value) return value;
@@ -584,11 +543,13 @@ function parseBoolean(value: string): boolean | undefined {
 
 async function extractDeepSearchData(): Promise<any> {
   try {
+    // Use the parser package's standalone functions
+    const dataLayers = extractDataLayers(window);
     const deepSearchData = {
-      jsonLd: extractJsonLd(),
-      dataLayer: extractDataLayer(),
-      meta: extractMetaTags(),
-      digitalData: extractDigitalData()
+      jsonLd: extractJsonLdData(document),
+      dataLayer: dataLayers.dataLayer || [],
+      meta: extractMetaTags(document),
+      digitalData: dataLayers.digitalData || {}
     };
 
     return {
@@ -604,62 +565,7 @@ async function extractDeepSearchData(): Promise<any> {
   }
 }
 
-function extractJsonLd(): any[] {
-  const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-  const jsonLdData: any[] = [];
-
-  jsonLdScripts.forEach((script, index) => {
-    try {
-      const content = script.textContent?.trim();
-      if (content) {
-        const parsed = JSON.parse(content);
-        jsonLdData.push(parsed);
-      }
-    } catch (error) {
-      console.warn(`Failed to parse JSON-LD script ${index}:`, error);
-    }
-  });
-
-  return jsonLdData;
-}
-
-function extractDataLayer(): any[] {
-  try {
-    // @ts-ignore
-    return window.dataLayer ? [...window.dataLayer] : [];
-  } catch (error) {
-    console.warn('Failed to extract dataLayer:', error);
-    return [];
-  }
-}
-
-function extractMetaTags(): { [key: string]: string } {
-  const metaTags: { [key: string]: string } = {};
-  const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
-
-  metaElements.forEach(meta => {
-    const property = meta.getAttribute('property') || 
-                    meta.getAttribute('name') || 
-                    meta.getAttribute('itemprop');
-    const content = meta.getAttribute('content');
-    
-    if (property && content) {
-      metaTags[property] = content;
-    }
-  });
-
-  return metaTags;
-}
-
-function extractDigitalData(): any {
-  try {
-    // @ts-ignore
-    return window.digitalData || {};
-  } catch (error) {
-    console.warn('Failed to extract digitalData:', error);
-    return {};
-  }
-}
+// Extraction functions have been moved up in the file
 
 async function testRecipe(recipe: any): Promise<any> {
   try {
@@ -821,9 +727,19 @@ function createDataHash(data: any): string {
   return hash.toString();
 }
 
+
 async function submitPriceData(data: any): Promise<any> {
   const result = await chrome.storage.local.get(['authToken']);
   const token = result.authToken;
+  
+  // Safety check - don't submit if not authenticated
+  if (!token) {
+    console.error('No auth token found - cannot submit price data');
+    return {
+      success: false,
+      error: 'User not authenticated'
+    };
+  }
   
   // Determine API URL based on environment
   const manifest = chrome.runtime.getManifest();
@@ -831,25 +747,17 @@ async function submitPriceData(data: any): Promise<any> {
   const API_BASE_URL = isDev ? 'http://localhost:3000/api/v1' : 'https://www.pricepatrol.co.nz/api/v1';
   
   const headers: any = {
-    'Content-Type': 'application/json'
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${token}`
   };
 
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
   try {
-    console.log(`Submitting to: ${API_BASE_URL}/prices/submit`);
-    console.log('Request data:', data);
-    
     const response = await fetch(`${API_BASE_URL}/prices/submit`, {
       method: 'POST',
       headers,
       body: JSON.stringify(data)
     });
 
-    console.log(`API response status: ${response.status}`);
-    
     let responseData;
     try {
       responseData = await response.json();
@@ -859,8 +767,6 @@ async function submitPriceData(data: any): Promise<any> {
       console.error('Response text:', text);
       throw new Error(`Invalid JSON response: ${text}`);
     }
-    
-    console.log('API response data:', responseData);
     
     if (!response.ok) {
       throw new Error(responseData.error || `HTTP ${response.status}`);
