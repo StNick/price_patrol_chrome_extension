@@ -240,6 +240,12 @@ class PricePatrolPopup {
             return;
         }
 
+        // Ensure user is logged in before attempting extraction
+        if (!this.isLoggedIn || !this.currentUser) {
+            this.showStatus('Please log in to extract product data', 'error');
+            return;
+        }
+
         const extractBtn = document.getElementById('extract-btn') as HTMLButtonElement;
         const statusDiv = document.getElementById('extraction-status')!;
 
@@ -507,6 +513,12 @@ class PricePatrolPopup {
 
     async triggerAutoExtraction(): Promise<void> {
         if (!this.currentTab?.id) return;
+        
+        // Ensure user is logged in before attempting auto-extraction
+        if (!this.isLoggedIn || !this.currentUser) {
+            console.log('User not logged in, skipping auto-extraction trigger');
+            return;
+        }
         
         try {
             // Send auto-extraction message to content script
