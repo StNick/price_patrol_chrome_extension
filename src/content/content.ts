@@ -1,5 +1,12 @@
 // Content script for Price Patrol extension
 
+import {
+  extractJsonLdData,
+  extractMetaTags,
+  extractDataLayers,
+  evaluateStructuredDataPath
+} from '@stnickza/pricepatrol-parser';
+
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleContentMessage(message).then(sendResponse);
@@ -213,8 +220,12 @@ async function extractFromPage(recipe: any, url: string): Promise<any> {
     priceSource: 'WEBSITE'
   };
 
-  // Get structured data context
-  const context = buildDataContext();
+  // Get structured data context using the parser package
+  const context = {
+    jsonLd: extractJsonLdData(document),
+    metaTags: extractMetaTags(document), 
+    dataLayers: extractDataLayers(window)
+  };
 
   for (const selector of recipe.selectors) {
     try {
@@ -231,46 +242,14 @@ async function extractFromPage(recipe: any, url: string): Promise<any> {
   return extractedData;
 }
 
-function buildDataContext(): any {
-  const context: any = {
-    metaTags: {},
-    jsonLd: [],
-    dataLayers: {}
-  };
-
-  // Extract meta tags
-  document.querySelectorAll('meta').forEach(tag => {
-    const key = tag.getAttribute('property') || tag.getAttribute('name');
-    if (key) {
-      context.metaTags[key] = tag.getAttribute('content') || '';
-    }
-  });
-
-  // Extract JSON-LD
-  document.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
-    try {
-      const data = JSON.parse(script.textContent || '');
-      context.jsonLd.push(data);
-    } catch (e) {
-      console.warn('Invalid JSON-LD:', e);
-    }
-  });
-
-  // Extract data layers
-  const win = window as any;
-  if (win.dataLayer) context.dataLayers.dataLayer = win.dataLayer;
-  if (win.digitalData) context.dataLayers.digitalData = win.digitalData;
-  if (win.utag_data) context.dataLayers.utag_data = win.utag_data;
-
-  return context;
-}
+// Structured data extraction functions are now imported from @pricepatrol/parser
 
 async function extractFieldValue(selector: any, context: any): Promise<string | null> {
   // Handle different extraction methods
   switch (selector.extractionMethod) {
     case 'STRUCTURED_DATA':
       if (selector.selector) {
-        return evaluateObjectPath(context, selector.selector);
+        return evaluateStructuredDataPath(context, selector.selector);
       }
       break;
 
@@ -409,7 +388,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
 
   // Fallback to legacy format for backwards compatibility
   if (selector.structuredDataPath) {
-    return evaluateObjectPath(context, selector.structuredDataPath);
+    return evaluateStructuredDataPath(context, selector.structuredDataPath);
   }
 
   if (selector.cssSelector) {
@@ -437,46 +416,7 @@ async function extractFieldValue(selector: any, context: any): Promise<string | 
   return null;
 }
 
-function evaluateObjectPath(obj: any, path: string): string | null {
-  try {
-    const parts = path.split('.');
-    let current = obj;
-    
-    for (const part of parts) {
-      if (part.includes('[') && part.includes(']')) {
-        // Extract property name and all array indices
-        const indices = Array.from(part.matchAll(/\[(\d+)\]/g), match => parseInt(match[1], 10));
-        const propertyName = part.split('[')[0];
-        
-        if (indices.length > 0 && propertyName) {
-          current = current[propertyName];
-          
-          // Apply each array index consecutively
-          for (const index of indices) {
-            if (Array.isArray(current)) {
-              current = current[index];
-            } else {
-              return null;
-            }
-          }
-        } else {
-          return null;
-        }
-      } else {
-        current = current[part];
-      }
-      
-      if (current === undefined || current === null) {
-        return null;
-      }
-    }
-    
-    return String(current);
-  } catch (error) {
-    console.warn('Path evaluation error:', error);
-    return null;
-  }
-}
+// Path evaluation function is now imported from @pricepatrol/parser
 
 function sanitizeCategory(value: string): string {
   if (!value) return value;
@@ -603,11 +543,13 @@ function parseBoolean(value: string): boolean | undefined {
 
 async function extractDeepSearchData(): Promise<any> {
   try {
+    // Use the parser package's standalone functions
+    const dataLayers = extractDataLayers(window);
     const deepSearchData = {
-      jsonLd: extractJsonLd(),
-      dataLayer: extractDataLayer(),
-      meta: extractMetaTags(),
-      digitalData: extractDigitalData()
+      jsonLd: extractJsonLdData(document),
+      dataLayer: dataLayers.dataLayer || [],
+      meta: extractMetaTags(document),
+      digitalData: dataLayers.digitalData || {}
     };
 
     return {
@@ -623,62 +565,7 @@ async function extractDeepSearchData(): Promise<any> {
   }
 }
 
-function extractJsonLd(): any[] {
-  const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-  const jsonLdData: any[] = [];
-
-  jsonLdScripts.forEach((script, index) => {
-    try {
-      const content = script.textContent?.trim();
-      if (content) {
-        const parsed = JSON.parse(content);
-        jsonLdData.push(parsed);
-      }
-    } catch (error) {
-      console.warn(`Failed to parse JSON-LD script ${index}:`, error);
-    }
-  });
-
-  return jsonLdData;
-}
-
-function extractDataLayer(): any[] {
-  try {
-    // @ts-ignore
-    return window.dataLayer ? [...window.dataLayer] : [];
-  } catch (error) {
-    console.warn('Failed to extract dataLayer:', error);
-    return [];
-  }
-}
-
-function extractMetaTags(): { [key: string]: string } {
-  const metaTags: { [key: string]: string } = {};
-  const metaElements = document.querySelectorAll('meta[property], meta[name], meta[itemprop]');
-
-  metaElements.forEach(meta => {
-    const property = meta.getAttribute('property') || 
-                    meta.getAttribute('name') || 
-                    meta.getAttribute('itemprop');
-    const content = meta.getAttribute('content');
-    
-    if (property && content) {
-      metaTags[property] = content;
-    }
-  });
-
-  return metaTags;
-}
-
-function extractDigitalData(): any {
-  try {
-    // @ts-ignore
-    return window.digitalData || {};
-  } catch (error) {
-    console.warn('Failed to extract digitalData:', error);
-    return {};
-  }
-}
+// Extraction functions have been moved up in the file
 
 async function testRecipe(recipe: any): Promise<any> {
   try {
